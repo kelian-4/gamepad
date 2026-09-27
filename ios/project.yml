@@ -1,0 +1,30 @@
+name: Gamepad
+options:
+  bundleIdPrefix: com.kelian.gamepad
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+targets:
+  Gamepad:
+    type: application
+    platform: iOS
+    sources:
+      - path: Gamepad/Sources
+    info:
+      path: Gamepad/Resources/Info.plist
+      properties:
+        UILaunchScreen: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kelian.gamepad
+        PRODUCT_NAME: Gamepad
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGN_IDENTITY: ""
+        DEVELOPMENT_TEAM: ""

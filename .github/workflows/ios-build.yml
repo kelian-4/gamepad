@@ -1,0 +1,76 @@
+name: iOS Build (unsigned IPA)
+
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build unsigned archive
+        working-directory: ios
+        run: |
+          xcodebuild \
+            -project Gamepad.xcodeproj \
+            -scheme Gamepad \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath build/Gamepad.xcarchive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            clean archive
+
+      - name: Package IPA
+        working-directory: ios
+        run: |
+          mkdir -p build/Payload
+          cp -R build/Gamepad.xcarchive/Products/Applications/Gamepad.app build/Payload/
+          cd build
+          zip -r Gamepad-unsigned.ipa Payload
+          cd ..
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gamepad-unsigned-ipa
+          path: ios/build/Gamepad-unsigned.ipa
+          retention-days: 30
+
+      - name: Write CI status log
+        if: always()
+        run: |
+          echo "# CI Status" > ci-status.md
+          echo "" >> ci-status.md
+          echo "- Run: ${{ github.run_id }}" >> ci-status.md
+          echo "- Commit: ${{ github.sha }}" >> ci-status.md
+          echo "- Résultat: ${{ job.status }}" >> ci-status.md
+          echo "- Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> ci-status.md
+
+      - name: Commit CI status log
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ci-status.md
+          git diff --cached --quiet || git commit -m "ci: update status for run ${{ github.run_id }}"
+          git push origin HEAD:${{ github.ref_name }}

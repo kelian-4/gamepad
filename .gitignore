@@ -1,0 +1,7 @@
+.DS_Store
+ios/Gamepad.xcodeproj/
+ios/build/
+*.xcuserstate
+xcuserdata/
+__pycache__/
+*.pyc
