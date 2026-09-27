@@ -18,8 +18,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Prepare debug log
         run: |
@@ -130,6 +128,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add debug/
-          git diff --cached --quiet || git commit -m "ci: debug logs for run ${{ github.run_id }}"
-          git pull --rebase origin ${{ github.ref_name }}
-          git push origin HEAD:${{ github.ref_name }}
+          if ! git diff --cached --quiet; then
+            git commit -m "ci: debug logs for run ${{ github.run_id }} [skip ci]"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
