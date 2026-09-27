@@ -21,62 +21,115 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare debug log
+        run: |
+          mkdir -p debug
+          {
+            echo "# CI Status"
+            echo ""
+            echo "- Run: ${{ github.run_id }} (attempt ${{ github.run_attempt }})"
+            echo "- Commit: ${{ github.sha }}"
+            echo "- Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+          } > debug/ci-status.md
+
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app
+        run: |
+          set +e
+          { sudo xcode-select -s /Applications/Xcode.app ; } > debug/01-select-xcode.log 2>&1
+          code=$?
+          echo "## Select Xcode (exit $code)" >> debug/ci-status.md
+          echo '```' >> debug/ci-status.md
+          tail -n 50 debug/01-select-xcode.log >> debug/ci-status.md
+          echo '```' >> debug/ci-status.md
+          xcodebuild -version >> debug/ci-status.md 2>&1 || true
+          exit $code
 
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: |
+          set +e
+          { brew install xcodegen ; } > debug/02-install-xcodegen.log 2>&1
+          code=$?
+          echo "## Install XcodeGen (exit $code)" >> debug/ci-status.md
+          echo '```' >> debug/ci-status.md
+          tail -n 60 debug/02-install-xcodegen.log >> debug/ci-status.md
+          echo '```' >> debug/ci-status.md
+          exit $code
 
       - name: Generate Xcode project
         working-directory: ios
-        run: xcodegen generate
+        run: |
+          set +e
+          { xcodegen generate ; } > ../debug/03-xcodegen-generate.log 2>&1
+          code=$?
+          echo "## Generate Xcode project (exit $code)" >> ../debug/ci-status.md
+          echo '```' >> ../debug/ci-status.md
+          tail -n 80 ../debug/03-xcodegen-generate.log >> ../debug/ci-status.md
+          echo '```' >> ../debug/ci-status.md
+          exit $code
 
       - name: Build unsigned archive
         working-directory: ios
         run: |
-          xcodebuild \
-            -project Gamepad.xcodeproj \
-            -scheme Gamepad \
-            -configuration Release \
-            -sdk iphoneos \
-            -archivePath build/Gamepad.xcarchive \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            clean archive
+          set +e
+          {
+            xcodebuild \
+              -project Gamepad.xcodeproj \
+              -scheme Gamepad \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath build/Gamepad.xcarchive \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO \
+              clean archive
+          } > ../debug/04-xcodebuild-archive.log 2>&1
+          code=$?
+          echo "## Build unsigned archive (exit $code)" >> ../debug/ci-status.md
+          echo '```' >> ../debug/ci-status.md
+          tail -n 150 ../debug/04-xcodebuild-archive.log >> ../debug/ci-status.md
+          echo '```' >> ../debug/ci-status.md
+          exit $code
 
       - name: Package IPA
         working-directory: ios
         run: |
-          mkdir -p build/Payload
-          cp -R build/Gamepad.xcarchive/Products/Applications/Gamepad.app build/Payload/
-          cd build
-          zip -r Gamepad-unsigned.ipa Payload
-          cd ..
+          set +e
+          {
+            mkdir -p build/Payload
+            cp -R build/Gamepad.xcarchive/Products/Applications/Gamepad.app build/Payload/
+            cd build
+            zip -r Gamepad-unsigned.ipa Payload
+            cd ..
+          } > ../debug/05-package-ipa.log 2>&1
+          code=$?
+          echo "## Package IPA (exit $code)" >> ../debug/ci-status.md
+          echo '```' >> ../debug/ci-status.md
+          tail -n 60 ../debug/05-package-ipa.log >> ../debug/ci-status.md
+          echo '```' >> ../debug/ci-status.md
+          exit $code
 
       - name: Upload IPA artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: Gamepad-unsigned-ipa
           path: ios/build/Gamepad-unsigned.ipa
           retention-days: 30
+          if-no-files-found: warn
 
-      - name: Write CI status log
+      - name: Finalize debug log
         if: always()
         run: |
-          echo "# CI Status" > ci-status.md
-          echo "" >> ci-status.md
-          echo "- Run: ${{ github.run_id }}" >> ci-status.md
-          echo "- Commit: ${{ github.sha }}" >> ci-status.md
-          echo "- Résultat: ${{ job.status }}" >> ci-status.md
-          echo "- Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> ci-status.md
+          echo "" >> debug/ci-status.md
+          echo "- Résultat global du job: ${{ job.status }}" >> debug/ci-status.md
 
-      - name: Commit CI status log
+      - name: Commit debug log
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ci-status.md
-          git diff --cached --quiet || git commit -m "ci: update status for run ${{ github.run_id }}"
+          git add debug/
+          git diff --cached --quiet || git commit -m "ci: debug logs for run ${{ github.run_id }}"
           git pull --rebase origin ${{ github.ref_name }}
           git push origin HEAD:${{ github.ref_name }}
