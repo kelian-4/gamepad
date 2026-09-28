@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import socket
 
 import websockets
 from websockets.http11 import Response
@@ -149,7 +150,17 @@ class VirtualGamepad:
         self.ui.close()
 
 
+def disable_nagle(websocket):
+    try:
+        sock = websocket.transport.get_extra_info("socket")
+        if sock is not None:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except Exception as exc:
+        log.warning("TCP_NODELAY non appliqué: %s", exc)
+
+
 async def handler(websocket, gamepad: VirtualGamepad):
+    disable_nagle(websocket)
     peer = websocket.remote_address
     log.info("iPhone connecté depuis %s", peer)
     try:
@@ -158,6 +169,9 @@ async def handler(websocket, gamepad: VirtualGamepad):
                 msg = json.loads(raw)
             except json.JSONDecodeError:
                 log.warning("JSON invalide: %r", raw)
+                continue
+            if msg.get("type") == "ping":
+                await websocket.send(raw)
                 continue
             gamepad.handle_message(msg)
     except websockets.exceptions.ConnectionClosed:

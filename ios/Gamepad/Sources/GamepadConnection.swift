@@ -11,6 +11,7 @@ enum ConnectionStatus: Equatable {
 @MainActor
 final class GamepadConnection: ObservableObject {
     @Published private(set) var status: ConnectionStatus = .disconnected
+    @Published private(set) var latencyMs: Int?
 
     private var connection: NWConnection?
     private let queue = DispatchQueue(label: "com.kelian.gamepad.ws")
@@ -18,6 +19,12 @@ final class GamepadConnection: ObservableObject {
     private var port: UInt16 = 8765
     private var reconnectTask: Task<Void, Never>?
     private var shouldStayConnected = false
+
+    private var pingTask: Task<Void, Never>?
+    private var pendingSticks: [String: (x: Double, y: Double)] = [:]
+    private var lastSentSticks: [String: (x: Double, y: Double)] = [:]
+    private var stickFlushScheduled = false
+    private static let stickFlushInterval: UInt64 = 8_000_000
 
     func connect(host: String, port: UInt16) {
         self.host = host
@@ -35,6 +42,12 @@ final class GamepadConnection: ObservableObject {
     }
 
     private func teardownCurrentConnection() {
+        pingTask?.cancel()
+        pingTask = nil
+        latencyMs = nil
+        pendingSticks.removeAll()
+        lastSentSticks.removeAll()
+        stickFlushScheduled = false
         guard let old = connection else { return }
         connection = nil
         old.stateUpdateHandler = nil
@@ -48,7 +61,9 @@ final class GamepadConnection: ObservableObject {
 
         status = .connecting
 
-        let params = NWParameters.tcp
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.noDelay = true
+        let params = NWParameters(tls: nil, tcp: tcpOptions)
         let wsOptions = NWProtocolWebSocket.Options()
         wsOptions.autoReplyPing = true
         params.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
@@ -67,6 +82,7 @@ final class GamepadConnection: ObservableObject {
                 switch state {
                 case .ready:
                     self.status = .connected
+                    self.startPing()
                 case .failed(let error):
                     self.handleConnectionLoss(error.localizedDescription)
                 case .waiting(let error):
@@ -100,43 +116,88 @@ final class GamepadConnection: ObservableObject {
     }
 
     private func receiveLoop(on conn: NWConnection) {
-        conn.receiveMessage { [weak self, weak conn] _, _, _, error in
+        conn.receiveMessage { [weak self, weak conn] data, _, _, error in
             Task { @MainActor in
                 guard let self, let conn, self.connection === conn else { return }
                 if let error {
                     self.handleConnectionLoss(error.localizedDescription)
                     return
                 }
+                if let data { self.handleIncoming(data) }
                 self.receiveLoop(on: conn)
             }
         }
     }
 
+    // MARK: - Mesure de latence
+
+    private func startPing() {
+        pingTask?.cancel()
+        pingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let t = DispatchTime.now().uptimeNanoseconds
+                self.sendRaw("{\"type\":\"ping\",\"t\":\(t)}")
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+    }
+
+    private func handleIncoming(_ data: Data) {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              obj["type"] as? String == "ping",
+              let sent = (obj["t"] as? NSNumber)?.uint64Value else { return }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now >= sent else { return }
+        latencyMs = Int((now - sent) / 1_000_000)
+    }
+
     // MARK: - Envoi des inputs
 
     func sendButton(name: String, pressed: Bool) {
-        send(json: ["type": "button", "name": name, "pressed": pressed])
-    }
-
-    func sendStick(name: String, x: Double, y: Double) {
-        send(json: ["type": "stick", "name": name, "x": x, "y": y])
-    }
-
-    func sendTrigger(name: String, value: Double) {
-        send(json: ["type": "trigger", "name": name, "value": value])
+        sendRaw("{\"type\":\"button\",\"name\":\"\(name)\",\"pressed\":\(pressed)}")
     }
 
     func sendDpad(x: Int, y: Int) {
-        send(json: ["type": "dpad", "x": x, "y": y])
+        sendRaw("{\"type\":\"dpad\",\"x\":\(x),\"y\":\(y)}")
     }
 
-    private func send(json: [String: Any]) {
-        guard let conn = connection, status == .connected else { return }
-        guard let data = try? JSONSerialization.data(withJSONObject: json) else { return }
+    func sendTrigger(name: String, value: Double) {
+        sendRaw("{\"type\":\"trigger\",\"name\":\"\(name)\",\"value\":\(String(format: "%.3f", value))}")
+    }
 
+    /// Les sticks sont coalescés: on ne garde que la dernière valeur par stick et on
+    /// l'envoie au plus toutes les ~8 ms, au lieu d'un message par événement tactile.
+    func sendStick(name: String, x: Double, y: Double) {
+        pendingSticks[name] = (x, y)
+        let isRelease = x == 0 && y == 0
+        if isRelease {
+            flushSticks()
+            return
+        }
+        guard !stickFlushScheduled else { return }
+        stickFlushScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.stickFlushInterval)
+            self?.flushSticks()
+        }
+    }
+
+    private func flushSticks() {
+        stickFlushScheduled = false
+        let toSend = pendingSticks
+        pendingSticks.removeAll()
+        for (name, value) in toSend {
+            if let last = lastSentSticks[name], last.x == value.x, last.y == value.y { continue }
+            lastSentSticks[name] = value
+            sendRaw("{\"type\":\"stick\",\"name\":\"\(name)\",\"x\":\(String(format: "%.3f", value.x)),\"y\":\(String(format: "%.3f", value.y))}")
+        }
+    }
+
+    private func sendRaw(_ json: String) {
+        guard let conn = connection, status == .connected else { return }
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "gamepadMessage", metadata: [metadata])
-
-        conn.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed { _ in })
+        conn.send(content: Data(json.utf8), contentContext: context, isComplete: true, completion: .idempotent)
     }
 }

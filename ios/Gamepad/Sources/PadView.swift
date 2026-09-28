@@ -31,6 +31,11 @@ struct PadView: View {
             Text(statusText)
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.55))
+            if let ms = state.connection.latencyMs {
+                Text("\(ms) ms")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(latencyColor(ms))
+            }
             Spacer()
             Button {
                 state.disconnect()
@@ -131,6 +136,12 @@ struct PadView: View {
     }
 
     // MARK: - Statut
+
+    private func latencyColor(_ ms: Int) -> Color {
+        if ms < 20 { return .green }
+        if ms < 50 { return .orange }
+        return .red
+    }
 
     private var statusColor: Color {
         switch state.connection.status {
