@@ -7,40 +7,31 @@ struct PadView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            VStack {
+            VStack(spacing: 0) {
                 topBar
-                Spacer()
-                mainControls
-                Spacer(minLength: 8)
+                shoulders
+                Spacer(minLength: 4)
+                mainLayout
+                Spacer(minLength: 4)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 10)
         }
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
     }
 
+    // MARK: - Barre du haut
+
     private var topBar: some View {
         HStack {
             Circle()
                 .fill(statusColor)
-                .frame(width: 10, height: 10)
+                .frame(width: 9, height: 9)
             Text(statusText)
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.6))
-
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.55))
             Spacer()
-
-            HStack(spacing: 12) {
-                SmallButtonView(label: "SELECT", buttonName: "select") { pressed in
-                    state.connection.sendButton(name: "select", pressed: pressed)
-                }
-                SmallButtonView(label: "START", buttonName: "start") { pressed in
-                    state.connection.sendButton(name: "start", pressed: pressed)
-                }
-            }
-
-            Spacer()
-
             Button {
                 state.disconnect()
             } label: {
@@ -48,43 +39,95 @@ struct PadView: View {
                     .foregroundColor(.white.opacity(0.4))
             }
         }
-        .padding(.top, 8)
+        .padding(.top, 6)
     }
 
-    private var mainControls: some View {
-        VStack(spacing: 28) {
-            HStack {
-                ShoulderButtonView(label: "L1", buttonName: "l1") { pressed in
+    // MARK: - LT/LB et RT/RB
+
+    private var shoulders: some View {
+        HStack(alignment: .top) {
+            VStack(spacing: 6) {
+                AnalogTriggerView(label: "LT") { v in
+                    state.connection.sendTrigger(name: "l2", value: v)
+                }
+                ShoulderButtonView(label: "LB", buttonName: "l1") { pressed in
                     state.connection.sendButton(name: "l1", pressed: pressed)
                 }
-                Spacer()
-                ShoulderButtonView(label: "R1", buttonName: "r1") { pressed in
+            }
+            Spacer()
+            VStack(spacing: 6) {
+                AnalogTriggerView(label: "RT") { v in
+                    state.connection.sendTrigger(name: "r2", value: v)
+                }
+                ShoulderButtonView(label: "RB", buttonName: "r1") { pressed in
                     state.connection.sendButton(name: "r1", pressed: pressed)
                 }
             }
+        }
+        .padding(.top, 4)
+    }
 
-            HStack {
-                VirtualStickView(stickName: "left") { x, y in
-                    state.connection.sendStick(name: "left", x: x, y: y)
+    // MARK: - Corps de la manette (disposition Xbox)
+
+    private var mainLayout: some View {
+        HStack(alignment: .center) {
+            // Colonne gauche : stick gauche en haut, croix en bas
+            VStack(spacing: 14) {
+                stickWithClick(name: "left", clickName: "thumbl")
+                DPadView { x, y in
+                    state.connection.sendDpad(x: x, y: y)
                 }
+            }
 
-                Spacer()
+            Spacer()
 
+            // Centre : View / Xbox / Menu
+            VStack(spacing: 14) {
+                XboxCenterButton { pressed in
+                    state.connection.sendButton(name: "mode", pressed: pressed)
+                }
+                HStack(spacing: 10) {
+                    SmallButtonView(label: "VIEW", buttonName: "select") { pressed in
+                        state.connection.sendButton(name: "select", pressed: pressed)
+                    }
+                    SmallButtonView(label: "MENU", buttonName: "start") { pressed in
+                        state.connection.sendButton(name: "start", pressed: pressed)
+                    }
+                }
+            }
+
+            Spacer()
+
+            // Colonne droite : ABXY en haut, stick droit en bas
+            VStack(spacing: 14) {
                 abxyCluster
+                stickWithClick(name: "right", clickName: "thumbr")
             }
         }
     }
 
+    private func stickWithClick(name: String, clickName: String) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            VirtualStickView(stickName: name) { x, y in
+                state.connection.sendStick(name: name, x: x, y: y)
+            }
+            StickClickButton { pressed in
+                state.connection.sendButton(name: clickName, pressed: pressed)
+            }
+            .offset(x: 6, y: 6)
+        }
+    }
+
     private var abxyCluster: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 2) {
             GamepadButtonView(label: "Y", buttonName: "y") { pressed in
                 state.connection.sendButton(name: "y", pressed: pressed)
             }
-            HStack(spacing: 4) {
+            HStack(spacing: 2) {
                 GamepadButtonView(label: "X", buttonName: "x") { pressed in
                     state.connection.sendButton(name: "x", pressed: pressed)
                 }
-                Spacer().frame(width: 60)
+                Spacer().frame(width: 56)
                 GamepadButtonView(label: "B", buttonName: "b") { pressed in
                     state.connection.sendButton(name: "b", pressed: pressed)
                 }
@@ -94,6 +137,8 @@ struct PadView: View {
             }
         }
     }
+
+    // MARK: - Statut
 
     private var statusColor: Color {
         switch state.connection.status {

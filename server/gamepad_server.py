@@ -12,7 +12,7 @@ Messages JSON attendus (un objet par message) :
   {"type": "trigger", "name": "l2", "value": 0.0..1.0}
   {"type": "gyro", "x": ..., "y": ..., "z": ...}   # optionnel, pour plus tard
 
-Boutons supportés : a, b, x, y, l1, r1, select, start
+Boutons supportés : a, b, x, y, l1, r1, select, start, mode, thumbl, thumbr
 """
 
 import asyncio
@@ -45,6 +45,9 @@ BUTTON_MAP = {
     "r1": e.BTN_TR,
     "select": e.BTN_SELECT,
     "start": e.BTN_START,
+    "mode": e.BTN_MODE,
+    "thumbl": e.BTN_THUMBL,
+    "thumbr": e.BTN_THUMBR,
 }
 
 STICK_AXES = {
@@ -57,6 +60,8 @@ TRIGGER_AXES = {
     "r2": e.ABS_RZ,
 }
 
+DPAD_AXES = (e.ABS_HAT0X, e.ABS_HAT0Y)
+
 CAPABILITIES = {
     e.EV_KEY: list(BUTTON_MAP.values()),
     e.EV_ABS: [
@@ -66,6 +71,9 @@ CAPABILITIES = {
     ] + [
         (axis, AbsInfo(value=0, min=0, max=255, fuzz=0, flat=0, resolution=0))
         for axis in TRIGGER_AXES.values()
+    ] + [
+        (axis, AbsInfo(value=0, min=-1, max=1, fuzz=0, flat=0, resolution=0))
+        for axis in DPAD_AXES
     ],
 }
 
@@ -121,6 +129,13 @@ class VirtualGamepad:
                 log.warning("Gâchette inconnue: %s", name)
                 return
             self.ui.write(e.EV_ABS, axis, to_trigger_value(msg.get("value", 0.0)))
+            self.ui.syn()
+
+        elif mtype == "dpad":
+            dx = clamp(int(msg.get("x", 0)), -1, 1)
+            dy = clamp(int(msg.get("y", 0)), -1, 1)
+            self.ui.write(e.EV_ABS, e.ABS_HAT0X, dx)
+            self.ui.write(e.EV_ABS, e.ABS_HAT0Y, dy)
             self.ui.syn()
 
         elif mtype == "gyro":
