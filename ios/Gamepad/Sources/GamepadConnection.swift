@@ -86,19 +86,16 @@ final class GamepadConnection: ObservableObject {
     }
 
     private func receiveLoop(on conn: NWConnection) {
-        conn.receiveMessage { [weak self] _, _, isComplete, error in
+        conn.receiveMessage { [weak self] _, _, _, error in
             guard let self else { return }
-            if let error {
-                Task { @MainActor in
+            Task { @MainActor in
+                if let error {
                     self.status = .failed(error.localizedDescription)
                     self.scheduleReconnectIfNeeded()
+                    return
                 }
-                return
+                self.receiveLoop(on: conn)
             }
-            if !isComplete {
-                // Message partiel, on ignore côté client : on n'attend aucune réponse du serveur pour l'instant.
-            }
-            self.receiveLoop(on: conn)
         }
     }
 
