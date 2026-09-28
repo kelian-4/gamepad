@@ -1,8 +1,11 @@
 import SwiftUI
 
 struct PadView: View {
-    @EnvironmentObject var state: GamepadState
+    @ObservedObject var connection: GamepadConnection
+    @State private var layout = PadLayout.load()
+    @State private var editing = false
     @State private var bridge: PadBridge?
+    @State private var surface: PadSurfaceView?
 
     var body: some View {
         GeometryReader { geo in
@@ -10,75 +13,67 @@ struct PadView: View {
                 Color.black.ignoresSafeArea()
 
                 if let bridge {
-                    PadSurface(controls: layout(in: geo.size), delegate: bridge)
-                        .ignoresSafeArea()
+                    PadSurface(layout: layout, editing: editing, delegate: bridge) { view in
+                        surface = view
+                    }
+                    .ignoresSafeArea()
                 }
 
-                statusBar
+                topBar
                     .padding(.top, geo.safeAreaInsets.top + 6)
                     .padding(.leading, max(geo.safeAreaInsets.leading, 16) + 8)
+                    .padding(.trailing, max(geo.safeAreaInsets.trailing, 16) + 8)
             }
         }
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .onAppear {
-            if bridge == nil { bridge = PadBridge(connection: state.connection) }
+            if bridge == nil {
+                bridge = PadBridge(connection: connection) { updated in
+                    layout = updated
+                    updated.save()
+                }
+            }
         }
     }
 
-    private var statusBar: some View {
-        HStack(spacing: 8) {
+    private var topBar: some View {
+        HStack(spacing: 10) {
             Circle()
                 .fill(statusColor)
                 .frame(width: 9, height: 9)
             Text(statusText)
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.55))
-            if let ms = state.connection.latencyMs {
+            if let ms = connection.latencyMs {
                 Text("\(ms) ms")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundColor(latencyColor(ms))
             }
+
+            Spacer()
+
+            if editing {
+                Button("Masquer / afficher") { surface?.toggleSelectedVisibility() }
+                    .font(.caption.bold())
+                Button("Réinitialiser") {
+                    PadLayout.resetSaved()
+                    layout = .standard
+                    surface?.layout = .standard
+                }
+                .font(.caption.bold())
+                Button("Terminer") { editing = false }
+                    .font(.caption.bold())
+                    .foregroundColor(.green)
+            } else {
+                Button {
+                    editing = true
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .foregroundColor(.white.opacity(0.6))
+                }
+            }
         }
-    }
-
-    private func layout(in size: CGSize) -> [PadControl] {
-        let w = size.width
-        let h = size.height
-        let midX = w / 2
-
-        let stickSize: CGFloat = min(150, h * 0.36)
-        let dpadSize: CGFloat = min(132, h * 0.32)
-        let btn: CGFloat = min(58, h * 0.14)
-        let gap: CGFloat = btn * 0.12
-        let shoulderW: CGFloat = 92
-        let shoulderH: CGFloat = 42
-
-        let leftStick = CGRect(x: midX - w * 0.30 - stickSize / 2, y: h * 0.20, width: stickSize, height: stickSize)
-        let dpad = CGRect(x: midX - w * 0.20 - dpadSize / 2, y: h * 0.58, width: dpadSize, height: dpadSize)
-
-        let abxyCenter = CGPoint(x: midX + w * 0.30, y: h * 0.36)
-        let step = btn + gap
-        let rightStick = CGRect(x: midX + w * 0.20 - stickSize / 2, y: h * 0.58, width: stickSize, height: stickSize)
-
-        func circle(_ c: CGPoint) -> CGRect {
-            CGRect(x: c.x - btn / 2, y: c.y - btn / 2, width: btn, height: btn)
-        }
-
-        return [
-            PadControl(kind: .stick("left"), frame: leftStick, label: ""),
-            PadControl(kind: .dpad, frame: dpad, label: ""),
-            PadControl(kind: .stick("right"), frame: rightStick, label: ""),
-            PadControl(kind: .button("y"), frame: circle(CGPoint(x: abxyCenter.x, y: abxyCenter.y - step)), label: "Y"),
-            PadControl(kind: .button("a"), frame: circle(CGPoint(x: abxyCenter.x, y: abxyCenter.y + step)), label: "A"),
-            PadControl(kind: .button("x"), frame: circle(CGPoint(x: abxyCenter.x - step, y: abxyCenter.y)), label: "X"),
-            PadControl(kind: .button("b"), frame: circle(CGPoint(x: abxyCenter.x + step, y: abxyCenter.y)), label: "B"),
-            PadControl(kind: .button("l1"), frame: CGRect(x: midX - w * 0.40, y: 14, width: shoulderW, height: shoulderH), label: "LB"),
-            PadControl(kind: .button("r1"), frame: CGRect(x: midX + w * 0.40 - shoulderW, y: 14, width: shoulderW, height: shoulderH), label: "RB"),
-            PadControl(kind: .button("mode"), frame: CGRect(x: midX - 22, y: h * 0.34, width: 44, height: 44), label: "◉"),
-            PadControl(kind: .button("select"), frame: CGRect(x: midX - 78, y: h * 0.52, width: 70, height: 32), label: "VIEW"),
-            PadControl(kind: .button("start"), frame: CGRect(x: midX + 8, y: h * 0.52, width: 70, height: 32), label: "MENU")
-        ]
     }
 
     private func latencyColor(_ ms: Int) -> Color {
@@ -88,7 +83,7 @@ struct PadView: View {
     }
 
     private var statusColor: Color {
-        switch state.connection.status {
+        switch connection.status {
         case .connected: return .green
         case .connecting: return .orange
         case .failed: return .red
@@ -97,7 +92,8 @@ struct PadView: View {
     }
 
     private var statusText: String {
-        switch state.connection.status {
+        if editing { return "Édition : glisse pour déplacer, pince pour redimensionner" }
+        switch connection.status {
         case .connected: return "Connecté"
         case .connecting: return "Connexion…"
         case .failed(let message): return message
@@ -109,9 +105,11 @@ struct PadView: View {
 @MainActor
 final class PadBridge: PadSurfaceDelegate {
     private let connection: GamepadConnection
+    private let onLayout: (PadLayout) -> Void
 
-    init(connection: GamepadConnection) {
+    init(connection: GamepadConnection, onLayout: @escaping (PadLayout) -> Void) {
         self.connection = connection
+        self.onLayout = onLayout
     }
 
     func button(_ name: String, pressed: Bool) {
@@ -125,8 +123,12 @@ final class PadBridge: PadSurfaceDelegate {
     func dpad(x: Int, y: Int) {
         connection.sendDpad(x: x, y: y)
     }
+
+    func layoutChanged(_ layout: PadLayout) {
+        onLayout(layout)
+    }
 }
 
 #Preview {
-    PadView().environmentObject(GamepadState())
+    PadView(connection: GamepadConnection())
 }

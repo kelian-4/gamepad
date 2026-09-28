@@ -1,122 +1,146 @@
 import SwiftUI
 import UIKit
 
-enum ControlKind {
-    case button(String)
-    case stick(String)
-    case dpad
-}
-
-struct PadControl {
-    let kind: ControlKind
-    let frame: CGRect
-    let label: String
-}
-
 @MainActor
 protocol PadSurfaceDelegate: AnyObject {
     func button(_ name: String, pressed: Bool)
     func stick(_ name: String, x: Double, y: Double)
     func dpad(x: Int, y: Int)
+    func layoutChanged(_ layout: PadLayout)
 }
 
 final class PadSurfaceView: UIView {
     weak var delegate: PadSurfaceDelegate?
 
-    var controls: [PadControl] = [] {
+    var layout: PadLayout = .standard {
         didSet { setNeedsDisplay() }
     }
 
-    private struct Tracked {
-        let index: Int
-        var lastDpad: (Int, Int) = (0, 0)
+    var editing = false {
+        didSet {
+            if editing { releaseEverything() }
+            selectedID = nil
+            setNeedsDisplay()
+        }
     }
 
-    private var tracked: [ObjectIdentifier: Tracked] = [:]
-    private var pressedButtons: Set<String> = []
+    private static let minimumPress: TimeInterval = 0.07
+
+    private var touchTargets: [ObjectIdentifier: String] = [:]
+    private var pressedSince: [String: CFTimeInterval] = [:]
+    private var pendingRelease: [String: DispatchWorkItem] = [:]
     private var stickOffsets: [String: CGPoint] = [:]
     private var dpadState: (Int, Int) = (0, 0)
+    private var selectedID: String?
+    private var dragOrigin: [ObjectIdentifier: (cx: Double, cy: Double, point: CGPoint)] = [:]
+    private var pinch: UIPinchGestureRecognizer?
+    private var pinchStartScale = 1.0
     private let impact = UIImpactFeedbackGenerator(style: .rigid)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isMultipleTouchEnabled = true
-        isExclusiveTouch = false
         backgroundColor = .clear
         impact.prepare()
+        let recognizer = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+        recognizer.cancelsTouchesInView = false
+        addGestureRecognizer(recognizer)
+        pinch = recognizer
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
+    private func element(at point: CGPoint) -> PadElement? {
+        layout.elements.reversed().first { el in
+            guard el.visible || editing else { return false }
+            let f = el.frame(in: bounds.size)
+            switch el.kind {
+            case .round, .stick, .dpad:
+                let c = CGPoint(x: f.midX, y: f.midY)
+                return hypot(point.x - c.x, point.y - c.y) <= f.width / 2 + 8
+            case .pill:
+                return f.insetBy(dx: -8, dy: -8).contains(point)
+            }
+        }
+    }
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         for touch in touches {
             let point = touch.location(in: self)
-            guard let index = controls.lastIndex(where: { hit($0, point) }) else { continue }
-            tracked[ObjectIdentifier(touch)] = Tracked(index: index)
-            apply(index: index, point: point, began: true)
+            guard let el = element(at: point) else {
+                if editing { selectedID = nil }
+                continue
+            }
+            let key = ObjectIdentifier(touch)
+            touchTargets[key] = el.id
+            if editing {
+                selectedID = el.id
+                dragOrigin[key] = (el.cx, el.cy, point)
+                pinchStartScale = el.scale
+            } else {
+                engage(el, at: point)
+            }
         }
         setNeedsDisplay()
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         for touch in touches {
-            guard let entry = tracked[ObjectIdentifier(touch)] else { continue }
-            apply(index: entry.index, point: touch.location(in: self), began: false)
+            let key = ObjectIdentifier(touch)
+            guard let id = touchTargets[key],
+                  let idx = layout.elements.firstIndex(where: { $0.id == id }) else { continue }
+            let point = touch.location(in: self)
+            if editing {
+                guard let origin = dragOrigin[key], bounds.width > 0, bounds.height > 0 else { continue }
+                let nx = origin.cx + Double((point.x - origin.point.x) / bounds.width)
+                let ny = origin.cy + Double((point.y - origin.point.y) / bounds.height)
+                layout.elements[idx].cx = min(max(nx, 0.03), 0.97)
+                layout.elements[idx].cy = min(max(ny, 0.05), 0.95)
+            } else {
+                track(layout.elements[idx], at: point)
+            }
         }
         setNeedsDisplay()
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        release(touches)
+        finish(touches)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        release(touches)
+        finish(touches)
     }
 
-    private func release(_ touches: Set<UITouch>) {
+    private func finish(_ touches: Set<UITouch>) {
         for touch in touches {
-            guard let entry = tracked.removeValue(forKey: ObjectIdentifier(touch)) else { continue }
-            let control = controls[entry.index]
-            switch control.kind {
-            case .button(let name):
-                if pressedButtons.remove(name) != nil {
-                    delegate?.button(name, pressed: false)
-                }
-            case .stick(let name):
-                stickOffsets[name] = .zero
-                delegate?.stick(name, x: 0, y: 0)
-            case .dpad:
-                dpadState = (0, 0)
-                delegate?.dpad(x: 0, y: 0)
+            let key = ObjectIdentifier(touch)
+            guard let id = touchTargets.removeValue(forKey: key) else { continue }
+            dragOrigin.removeValue(forKey: key)
+            if editing {
+                delegate?.layoutChanged(layout)
+                continue
             }
+            guard let el = layout.elements.first(where: { $0.id == id }) else { continue }
+            disengage(el)
         }
         setNeedsDisplay()
     }
 
-    private func hit(_ control: PadControl, _ point: CGPoint) -> Bool {
-        switch control.kind {
-        case .button(let name) where control.label.count == 1 && name != "l1" && name != "r1":
-            return distance(point, center(of: control.frame)) <= control.frame.width / 2 + 6
+    private func engage(_ el: PadElement, at point: CGPoint) {
+        switch el.kind {
+        case .round, .pill:
+            press(el.id)
         case .stick, .dpad:
-            return distance(point, center(of: control.frame)) <= control.frame.width / 2 + 10
-        default:
-            return control.frame.insetBy(dx: -6, dy: -6).contains(point)
+            track(el, at: point)
         }
     }
 
-    private func apply(index: Int, point: CGPoint, began: Bool) {
-        let control = controls[index]
-        switch control.kind {
-        case .button(let name):
-            if !pressedButtons.contains(name) {
-                pressedButtons.insert(name)
-                impact.impactOccurred()
-                delegate?.button(name, pressed: true)
-            }
-        case .stick(let name):
-            let c = center(of: control.frame)
-            let radius = (control.frame.width - 64) / 2
+    private func track(_ el: PadElement, at point: CGPoint) {
+        let f = el.frame(in: bounds.size)
+        let c = CGPoint(x: f.midX, y: f.midY)
+        switch el.kind {
+        case .stick:
+            let radius = max((f.width - 64 * el.scale) / 2, 1)
             var dx = point.x - c.x
             var dy = point.y - c.y
             let d = hypot(dx, dy)
@@ -124,10 +148,9 @@ final class PadSurfaceView: UIView {
                 dx = dx / d * radius
                 dy = dy / d * radius
             }
-            stickOffsets[name] = CGPoint(x: dx, y: dy)
-            delegate?.stick(name, x: Double(dx / radius), y: Double(dy / radius))
+            stickOffsets[el.id] = CGPoint(x: dx, y: dy)
+            delegate?.stick(el.id, x: Double(dx / radius), y: Double(dy / radius))
         case .dpad:
-            let c = center(of: control.frame)
             let dx = point.x - c.x
             let dy = point.y - c.y
             var x = 0
@@ -141,68 +164,160 @@ final class PadSurfaceView: UIView {
                 dpadState = (x, y)
                 delegate?.dpad(x: x, y: y)
             }
+        default:
+            break
         }
     }
 
-    private func center(of rect: CGRect) -> CGPoint {
-        CGPoint(x: rect.midX, y: rect.midY)
+    private func disengage(_ el: PadElement) {
+        switch el.kind {
+        case .round, .pill:
+            release(el.id)
+        case .stick:
+            stickOffsets[el.id] = .zero
+            delegate?.stick(el.id, x: 0, y: 0)
+        case .dpad:
+            dpadState = (0, 0)
+            delegate?.dpad(x: 0, y: 0)
+        }
     }
 
-    private func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
-        hypot(a.x - b.x, a.y - b.y)
+    private func press(_ id: String) {
+        pendingRelease[id]?.cancel()
+        pendingRelease[id] = nil
+        if pressedSince[id] == nil {
+            pressedSince[id] = CACurrentMediaTime()
+            impact.impactOccurred()
+            delegate?.button(id, pressed: true)
+        }
     }
+
+    private func release(_ id: String) {
+        guard let since = pressedSince[id] else { return }
+        let elapsed = CACurrentMediaTime() - since
+        let remaining = Self.minimumPress - elapsed
+        if remaining <= 0 {
+            sendRelease(id)
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in
+            self?.sendRelease(id)
+        }
+        pendingRelease[id] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + remaining, execute: work)
+    }
+
+    private func sendRelease(_ id: String) {
+        pendingRelease[id] = nil
+        guard pressedSince[id] != nil else { return }
+        pressedSince[id] = nil
+        delegate?.button(id, pressed: false)
+        setNeedsDisplay()
+    }
+
+    private func releaseEverything() {
+        for id in Array(pressedSince.keys) {
+            pendingRelease[id]?.cancel()
+            pendingRelease[id] = nil
+            pressedSince[id] = nil
+            delegate?.button(id, pressed: false)
+        }
+        for id in Array(stickOffsets.keys) {
+            stickOffsets[id] = .zero
+            delegate?.stick(id, x: 0, y: 0)
+        }
+        if dpadState != (0, 0) {
+            dpadState = (0, 0)
+            delegate?.dpad(x: 0, y: 0)
+        }
+        touchTargets.removeAll()
+    }
+
+    @objc private func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+        guard editing, let id = selectedID,
+              let idx = layout.elements.firstIndex(where: { $0.id == id }) else { return }
+        switch recognizer.state {
+        case .began:
+            pinchStartScale = layout.elements[idx].scale
+        case .changed:
+            layout.elements[idx].scale = min(max(pinchStartScale * Double(recognizer.scale), 0.5), 2.2)
+            setNeedsDisplay()
+        case .ended, .cancelled:
+            delegate?.layoutChanged(layout)
+        default:
+            break
+        }
+    }
+
+    func toggleSelectedVisibility() {
+        guard let id = selectedID,
+              let idx = layout.elements.firstIndex(where: { $0.id == id }) else { return }
+        layout.elements[idx].visible.toggle()
+        delegate?.layoutChanged(layout)
+        setNeedsDisplay()
+    }
+
+    var hasSelection: Bool { selectedID != nil }
 
     override func draw(_ rect: CGRect) {
         let accent = UIColor.tintColor
         let base = UIColor.white.withAlphaComponent(0.08)
         let stroke = UIColor.white.withAlphaComponent(0.18)
 
-        for control in controls {
-            switch control.kind {
-            case .button(let name):
-                let pressed = pressedButtons.contains(name)
-                let isRound = control.label.count == 1 && name != "l1" && name != "r1"
-                let path = isRound
-                    ? UIBezierPath(ovalIn: control.frame)
-                    : UIBezierPath(roundedRect: control.frame, cornerRadius: control.frame.height / 2.4)
-                (pressed ? accent : base).setFill()
-                path.fill()
-                stroke.setStroke()
-                path.lineWidth = 1.5
-                path.stroke()
-                drawLabel(control.label, in: control.frame, color: pressed ? .black : UIColor.white.withAlphaComponent(0.85), size: isRound ? 20 : 14)
+        for el in layout.elements {
+            if !el.visible && !editing { continue }
+            let dim: CGFloat = el.visible ? 1 : 0.25
+            let f = el.frame(in: bounds.size)
+            let selected = editing && el.id == selectedID
 
-            case .stick(let name):
-                let ring = UIBezierPath(ovalIn: control.frame)
-                base.setFill()
+            switch el.kind {
+            case .round, .pill:
+                let pressed = pressedSince[el.id] != nil
+                let path = el.kind == .round
+                    ? UIBezierPath(ovalIn: f)
+                    : UIBezierPath(roundedRect: f, cornerRadius: f.height / 2.4)
+                (pressed ? accent : base.withAlphaComponent(0.08 * dim + 0.0)).setFill()
+                path.fill()
+                stroke.withAlphaComponent(0.18 * dim + (selected ? 0.5 : 0)).setStroke()
+                path.lineWidth = selected ? 2.5 : 1.5
+                path.stroke()
+                drawLabel(el.label, in: f,
+                          color: pressed ? .black : UIColor.white.withAlphaComponent(0.85 * dim),
+                          size: (el.kind == .round ? 20 : 14) * CGFloat(el.scale))
+
+            case .stick:
+                let ring = UIBezierPath(ovalIn: f)
+                base.withAlphaComponent(0.08 * dim).setFill()
                 ring.fill()
-                stroke.setStroke()
-                ring.lineWidth = 1.5
+                stroke.withAlphaComponent(0.18 * dim + (selected ? 0.5 : 0)).setStroke()
+                ring.lineWidth = selected ? 2.5 : 1.5
                 ring.stroke()
-                let offset = stickOffsets[name] ?? .zero
-                let c = center(of: control.frame)
-                let nub = CGRect(x: c.x + offset.x - 32, y: c.y + offset.y - 32, width: 64, height: 64)
-                let active = offset != .zero
-                (active ? accent : accent.withAlphaComponent(0.75)).setFill()
+                let offset = stickOffsets[el.id] ?? .zero
+                let nubSize = 64 * CGFloat(el.scale)
+                let nub = CGRect(x: f.midX + offset.x - nubSize / 2, y: f.midY + offset.y - nubSize / 2,
+                                 width: nubSize, height: nubSize)
+                accent.withAlphaComponent((offset == .zero ? 0.75 : 1) * dim).setFill()
                 UIBezierPath(ovalIn: nub).fill()
 
             case .dpad:
-                let ring = UIBezierPath(ovalIn: control.frame)
-                base.setFill()
+                let ring = UIBezierPath(ovalIn: f)
+                base.withAlphaComponent(0.08 * dim).setFill()
                 ring.fill()
-                stroke.setStroke()
-                ring.lineWidth = 1.5
+                stroke.withAlphaComponent(0.18 * dim + (selected ? 0.5 : 0)).setStroke()
+                ring.lineWidth = selected ? 2.5 : 1.5
                 ring.stroke()
-                let c = center(of: control.frame)
-                let arrows: [(String, CGPoint, Bool)] = [
-                    ("▲", CGPoint(x: c.x, y: c.y - 44), dpadState.1 == -1),
-                    ("▼", CGPoint(x: c.x, y: c.y + 44), dpadState.1 == 1),
-                    ("◀", CGPoint(x: c.x - 44, y: c.y), dpadState.0 == -1),
-                    ("▶", CGPoint(x: c.x + 44, y: c.y), dpadState.0 == 1)
+                let reach = f.width * 0.33
+                let arrows: [(String, CGFloat, CGFloat, Bool)] = [
+                    ("▲", 0, -reach, dpadState.1 == -1),
+                    ("▼", 0, reach, dpadState.1 == 1),
+                    ("◀", -reach, 0, dpadState.0 == -1),
+                    ("▶", reach, 0, dpadState.0 == 1)
                 ]
-                for (glyph, p, active) in arrows {
-                    let r = CGRect(x: p.x - 16, y: p.y - 16, width: 32, height: 32)
-                    drawLabel(glyph, in: r, color: active ? accent : UIColor.white.withAlphaComponent(0.55), size: 18)
+                for (glyph, ox, oy, active) in arrows {
+                    let r = CGRect(x: f.midX + ox - 16, y: f.midY + oy - 16, width: 32, height: 32)
+                    drawLabel(glyph, in: r,
+                              color: active ? accent : UIColor.white.withAlphaComponent(0.55 * dim),
+                              size: 18 * CGFloat(el.scale))
                 }
             }
         }
@@ -220,20 +335,23 @@ final class PadSurfaceView: UIView {
 }
 
 struct PadSurface: UIViewRepresentable {
-    let controls: [PadControl]
+    let layout: PadLayout
+    let editing: Bool
     let delegate: PadSurfaceDelegate
+    let onReady: (PadSurfaceView) -> Void
 
     func makeUIView(context: Context) -> PadSurfaceView {
         let v = PadSurfaceView()
         v.delegate = delegate
-        v.controls = controls
+        v.layout = layout
+        v.editing = editing
+        DispatchQueue.main.async { onReady(v) }
         return v
     }
 
     func updateUIView(_ uiView: PadSurfaceView, context: Context) {
         uiView.delegate = delegate
-        if uiView.controls.count != controls.count || zip(uiView.controls, controls).contains(where: { $0.frame != $1.frame }) {
-            uiView.controls = controls
-        }
+        if uiView.editing != editing { uiView.editing = editing }
+        if !editing && uiView.layout != layout { uiView.layout = layout }
     }
 }

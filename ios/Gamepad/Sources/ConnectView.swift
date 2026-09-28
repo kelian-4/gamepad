@@ -2,11 +2,12 @@ import SwiftUI
 
 struct ConnectView: View {
     @EnvironmentObject var state: GamepadState
+    @ObservedObject var connection: GamepadConnection
 
     var body: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 16) {
             Image(systemName: "gamecontroller.fill")
-                .font(.system(size: 44))
+                .font(.system(size: 40))
                 .foregroundColor(.accentColor)
 
             Text("Manette virtuelle")
@@ -28,6 +29,7 @@ struct ConnectView: View {
             statusLabel
 
             Button {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 state.connect()
             } label: {
                 Text("Se connecter")
@@ -37,13 +39,24 @@ struct ConnectView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(state.serverHost.isEmpty)
+
+            if !connection.events.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(connection.events.enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                }
+                .frame(maxWidth: 320, alignment: .leading)
+            }
         }
         .padding()
     }
 
     @ViewBuilder
     private var statusLabel: some View {
-        switch state.connection.status {
+        switch connection.status {
         case .connecting:
             Label("Connexion…", systemImage: "ellipsis.circle")
                 .foregroundColor(.orange)
@@ -58,5 +71,6 @@ struct ConnectView: View {
 }
 
 #Preview {
-    ConnectView().environmentObject(GamepadState())
+    let s = GamepadState()
+    return ConnectView(connection: s.connection).environmentObject(s)
 }

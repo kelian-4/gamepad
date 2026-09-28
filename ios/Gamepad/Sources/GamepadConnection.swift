@@ -12,6 +12,7 @@ enum ConnectionStatus: Equatable {
 final class GamepadConnection: ObservableObject {
     @Published private(set) var status: ConnectionStatus = .disconnected
     @Published private(set) var latencyMs: Int?
+    @Published private(set) var events: [String] = []
 
     private var connection: NWConnection?
     private let queue = DispatchQueue(label: "com.kelian.gamepad.ws")
@@ -27,7 +28,16 @@ final class GamepadConnection: ObservableObject {
     private var stickFlushScheduled = false
     private static let stickFlushInterval: UInt64 = 8_000_000
 
+    private func log(_ text: String) {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        events.append("\(f.string(from: Date())) \(text)")
+        if events.count > 12 { events.removeFirst(events.count - 12) }
+    }
+
     func connect(host: String, port: UInt16) {
+        events.removeAll()
+        log("connexion à \(host):\(port)")
         self.host = host
         self.port = port
         shouldStayConnected = true
@@ -84,13 +94,16 @@ final class GamepadConnection: ObservableObject {
                 guard let self, let conn, self.connection === conn else { return }
                 switch state {
                 case .ready:
+                    self.log("prêt")
                     self.timeoutTask?.cancel()
                     self.timeoutTask = nil
                     self.status = .connected
                     self.startPing()
                 case .failed(let error):
+                    self.log("échec: \(error.localizedDescription)")
                     self.handleConnectionLoss(error.localizedDescription)
-                case .waiting:
+                case .waiting(let error):
+                    self.log("attente: \(error.localizedDescription)")
                     self.status = .connecting
                 case .cancelled:
                     break
@@ -111,6 +124,7 @@ final class GamepadConnection: ObservableObject {
             try? await Task.sleep(nanoseconds: 6_000_000_000)
             guard !Task.isCancelled, let self, let conn, self.connection === conn else { return }
             if self.status != .connected {
+                self.log("délai dépassé")
                 self.handleConnectionLoss("Délai dépassé. Vérifie Réglages > Confidentialité > Réseau local")
             }
         }
@@ -137,6 +151,7 @@ final class GamepadConnection: ObservableObject {
             Task { @MainActor in
                 guard let self, let conn, self.connection === conn else { return }
                 if let error {
+                    self.log("réception: \(error.localizedDescription)")
                     self.handleConnectionLoss(error.localizedDescription)
                     return
                 }

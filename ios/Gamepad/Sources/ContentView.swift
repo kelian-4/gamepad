@@ -4,15 +4,23 @@ struct ContentView: View {
     @EnvironmentObject var state: GamepadState
 
     var body: some View {
+        Root(connection: state.connection)
+            .preferredColorScheme(.dark)
+    }
+}
+
+private struct Root: View {
+    @ObservedObject var connection: GamepadConnection
+
+    var body: some View {
         Group {
-            if state.connection.status == .connected {
-                PadView()
+            if connection.status == .connected {
+                PadView(connection: connection)
             } else {
-                ConnectView()
+                ConnectView(connection: connection)
             }
         }
-        .preferredColorScheme(.dark)
-        .animation(.easeInOut(duration: 0.25), value: state.connection.status)
+        .animation(.easeInOut(duration: 0.2), value: connection.status)
     }
 }
 
