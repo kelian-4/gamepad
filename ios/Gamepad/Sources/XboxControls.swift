@@ -55,52 +55,6 @@ struct DPadView: View {
     }
 }
 
-struct AnalogTriggerView: View {
-    let label: String
-    let onChange: (Double) -> Void
-
-    private let width: CGFloat = 92
-    private let height: CGFloat = 46
-
-    @State private var value: Double = 0
-    @State private var lastSent: Double = 0
-
-    var body: some View {
-        ZStack(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.white.opacity(0.08))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.18), lineWidth: 1.5))
-
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.accentColor.opacity(0.85))
-                .frame(width: max(0, width * value))
-
-            Text(label)
-                .font(.system(size: 15, weight: .bold, design: .rounded))
-                .foregroundColor(value > 0.5 ? .black : .white.opacity(0.85))
-                .frame(width: width)
-        }
-        .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .contentShape(RoundedRectangle(cornerRadius: 10))
-        .gesture(
-            DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                .onChanged { drag in
-                    let v = min(max(Double(drag.location.x / width), 0.15), 1.0)
-                    set(v)
-                }
-                .onEnded { _ in set(0) }
-        )
-    }
-
-    private func set(_ v: Double) {
-        value = v
-        guard abs(v - lastSent) >= 0.03 || v == 0 else { return }
-        lastSent = v
-        onChange(v)
-    }
-}
-
 struct StickClickButton: View {
     let onPress: (Bool) -> Void
     @State private var isPressed = false

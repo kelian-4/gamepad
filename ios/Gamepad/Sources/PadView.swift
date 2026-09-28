@@ -14,7 +14,7 @@ struct PadView: View {
                 mainLayout
                 Spacer(minLength: 4)
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 64)
             .padding(.bottom, 10)
         }
         .statusBarHidden()
@@ -46,22 +46,12 @@ struct PadView: View {
 
     private var shoulders: some View {
         HStack(alignment: .top) {
-            VStack(spacing: 6) {
-                AnalogTriggerView(label: "LT") { v in
-                    state.connection.sendTrigger(name: "l2", value: v)
-                }
-                ShoulderButtonView(label: "LB", buttonName: "l1") { pressed in
-                    state.connection.sendButton(name: "l1", pressed: pressed)
-                }
+            ShoulderButtonView(label: "LB", buttonName: "l1") { pressed in
+                state.connection.sendButton(name: "l1", pressed: pressed)
             }
             Spacer()
-            VStack(spacing: 6) {
-                AnalogTriggerView(label: "RT") { v in
-                    state.connection.sendTrigger(name: "r2", value: v)
-                }
-                ShoulderButtonView(label: "RB", buttonName: "r1") { pressed in
-                    state.connection.sendButton(name: "r1", pressed: pressed)
-                }
+            ShoulderButtonView(label: "RB", buttonName: "r1") { pressed in
+                state.connection.sendButton(name: "r1", pressed: pressed)
             }
         }
         .padding(.top, 4)
@@ -71,12 +61,13 @@ struct PadView: View {
 
     private var mainLayout: some View {
         HStack(alignment: .center) {
-            // Colonne gauche : stick gauche en haut, croix en bas
+            // Colonne gauche : stick gauche en haut, croix en bas (rapprochée du centre)
             VStack(spacing: 14) {
                 stickWithClick(name: "left", clickName: "thumbl")
                 DPadView { x, y in
                     state.connection.sendDpad(x: x, y: y)
                 }
+                .padding(.leading, 60)
             }
 
             Spacer()
@@ -98,10 +89,11 @@ struct PadView: View {
 
             Spacer()
 
-            // Colonne droite : ABXY en haut, stick droit en bas
+            // Colonne droite : ABXY en haut, stick droit en bas (rapproché du centre)
             VStack(spacing: 14) {
                 abxyCluster
                 stickWithClick(name: "right", clickName: "thumbr")
+                    .padding(.trailing, 60)
             }
         }
     }
