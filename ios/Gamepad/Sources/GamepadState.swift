@@ -3,40 +3,26 @@ import Combine
 
 @MainActor
 final class GamepadState: ObservableObject {
-    static let defaultPort: UInt16 = 8765
-
-    @Published var serverAddress: String {
-        didSet { UserDefaults.standard.set(serverAddress, forKey: Self.addressKey) }
+    @Published var serverHost: String {
+        didSet { UserDefaults.standard.set(serverHost, forKey: Self.hostKey) }
+    }
+    @Published var serverPort: String {
+        didSet { UserDefaults.standard.set(serverPort, forKey: Self.portKey) }
     }
 
     let connection = GamepadConnection()
 
-    private static let addressKey = "gamepad.server.address"
+    private static let hostKey = "gamepad.server.host"
+    private static let portKey = "gamepad.server.port"
 
     init() {
-        self.serverAddress = UserDefaults.standard.string(forKey: Self.addressKey) ?? ""
-    }
-
-    var parsedAddress: (host: String, port: UInt16)? {
-        let trimmed = serverAddress
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "ws://", with: "")
-            .replacingOccurrences(of: "http://", with: "")
-        guard !trimmed.isEmpty else { return nil }
-
-        let parts = trimmed.split(separator: ":", maxSplits: 1).map(String.init)
-        guard let host = parts.first, !host.isEmpty else { return nil }
-
-        if parts.count == 2 {
-            guard let port = UInt16(parts[1]) else { return nil }
-            return (host, port)
-        }
-        return (host, Self.defaultPort)
+        self.serverHost = UserDefaults.standard.string(forKey: Self.hostKey) ?? ""
+        self.serverPort = UserDefaults.standard.string(forKey: Self.portKey) ?? "8765"
     }
 
     func connect() {
-        guard let address = parsedAddress else { return }
-        connection.connect(host: address.host, port: address.port)
+        guard let port = UInt16(serverPort), !serverHost.isEmpty else { return }
+        connection.connect(host: serverHost, port: port)
     }
 
     func disconnect() {

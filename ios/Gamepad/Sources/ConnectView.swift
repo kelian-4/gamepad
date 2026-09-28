@@ -12,18 +12,18 @@ struct ConnectView: View {
             Text("Manette virtuelle")
                 .font(.title2.bold())
 
-            TextField("192.168.1.42:8765", text: $state.serverAddress)
-                .textFieldStyle(.roundedBorder)
-                .keyboardType(.numbersAndPunctuation)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .submitLabel(.go)
-                .onSubmit { state.connect() }
-                .frame(maxWidth: 280)
+            VStack(spacing: 10) {
+                TextField("Adresse IP (ex: 192.168.1.42)", text: $state.serverHost)
+                    .textFieldStyle(.roundedBorder)
+                    .keyboardType(.decimalPad)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
 
-            Text("Le port 8765 est utilisé par défaut s'il est omis")
-                .font(.caption)
-                .foregroundColor(.secondary)
+                TextField("Port", text: $state.serverPort)
+                    .textFieldStyle(.roundedBorder)
+                    .keyboardType(.numberPad)
+            }
+            .frame(maxWidth: 280)
 
             statusLabel
 
@@ -36,7 +36,7 @@ struct ConnectView: View {
                     .padding(.vertical, 12)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(state.parsedAddress == nil)
+            .disabled(state.serverHost.isEmpty)
         }
         .padding()
     }
