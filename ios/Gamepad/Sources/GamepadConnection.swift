@@ -21,6 +21,7 @@ final class GamepadConnection: ObservableObject {
     private var shouldStayConnected = false
 
     private var pingTask: Task<Void, Never>?
+    private var timeoutTask: Task<Void, Never>?
     private var pendingSticks: [String: (x: Double, y: Double)] = [:]
     private var lastSentSticks: [String: (x: Double, y: Double)] = [:]
     private var stickFlushScheduled = false
@@ -42,6 +43,8 @@ final class GamepadConnection: ObservableObject {
     }
 
     private func teardownCurrentConnection() {
+        timeoutTask?.cancel()
+        timeoutTask = nil
         pingTask?.cancel()
         pingTask = nil
         latencyMs = nil
@@ -81,12 +84,14 @@ final class GamepadConnection: ObservableObject {
                 guard let self, let conn, self.connection === conn else { return }
                 switch state {
                 case .ready:
+                    self.timeoutTask?.cancel()
+                    self.timeoutTask = nil
                     self.status = .connected
                     self.startPing()
                 case .failed(let error):
                     self.handleConnectionLoss(error.localizedDescription)
-                case .waiting(let error):
-                    self.status = .failed(error.localizedDescription)
+                case .waiting:
+                    self.status = .connecting
                 case .cancelled:
                     break
                 default:
@@ -97,6 +102,18 @@ final class GamepadConnection: ObservableObject {
 
         conn.start(queue: queue)
         receiveLoop(on: conn)
+        armTimeout(for: conn)
+    }
+
+    private func armTimeout(for conn: NWConnection) {
+        timeoutTask?.cancel()
+        timeoutTask = Task { [weak self, weak conn] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard !Task.isCancelled, let self, let conn, self.connection === conn else { return }
+            if self.status != .connected {
+                self.handleConnectionLoss("Délai dépassé. Vérifie Réglages > Confidentialité > Réseau local")
+            }
+        }
     }
 
     private func handleConnectionLoss(_ message: String) {
@@ -129,8 +146,6 @@ final class GamepadConnection: ObservableObject {
         }
     }
 
-    // MARK: - Mesure de latence
-
     private func startPing() {
         pingTask?.cancel()
         pingTask = Task { [weak self] in
@@ -152,8 +167,6 @@ final class GamepadConnection: ObservableObject {
         latencyMs = Int((now - sent) / 1_000_000)
     }
 
-    // MARK: - Envoi des inputs
-
     func sendButton(name: String, pressed: Bool) {
         sendRaw("{\"type\":\"button\",\"name\":\"\(name)\",\"pressed\":\(pressed)}")
     }
@@ -166,8 +179,6 @@ final class GamepadConnection: ObservableObject {
         sendRaw("{\"type\":\"trigger\",\"name\":\"\(name)\",\"value\":\(String(format: "%.3f", value))}")
     }
 
-    /// Les sticks sont coalescés: on ne garde que la dernière valeur par stick et on
-    /// l'envoie au plus toutes les ~8 ms, au lieu d'un message par événement tactile.
     func sendStick(name: String, x: Double, y: Double) {
         pendingSticks[name] = (x, y)
         let isRelease = x == 0 && y == 0

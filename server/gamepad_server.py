@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-"""
-Serveur de manette virtuelle pour iPhone -> NixOS.
-
-Reçoit des messages JSON via WebSocket depuis un iPhone (page web) et
-traduit ça en évènements manette via uinput, comme si une vraie manette
-Xbox/PS était branchée.
-
-Messages JSON attendus (un objet par message) :
-  {"type": "stick", "name": "left", "x": -1.0..1.0, "y": -1.0..1.0}
-  {"type": "button", "name": "a", "pressed": true|false}
-  {"type": "trigger", "name": "l2", "value": 0.0..1.0}
-  {"type": "gyro", "x": ..., "y": ..., "z": ...}   # optionnel, pour plus tard
-
-Boutons supportés : a, b, x, y, l1, r1, select, start, mode, thumbl, thumbr
-"""
 
 import asyncio
 import json
@@ -31,12 +16,9 @@ HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gamepad_co
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("gamepad")
 
-# --- Configuration de la manette virtuelle ---------------------------------
-
 AXIS_MIN = -32768
 AXIS_MAX = 32767
 
-# Mapping nom logique -> code evdev
 BUTTON_MAP = {
     "a": e.BTN_SOUTH,
     "b": e.BTN_EAST,
@@ -78,22 +60,16 @@ CAPABILITIES = {
     ],
 }
 
-
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
-
 def to_axis_value(f: float) -> int:
-    """Convertit un float -1.0..1.0 en valeur d'axe evdev."""
     f = clamp(f, -1.0, 1.0)
     return int(f * AXIS_MAX)
 
-
 def to_trigger_value(f: float) -> int:
-    """Convertit un float 0.0..1.0 en valeur de gâchette 0..255."""
     f = clamp(f, 0.0, 1.0)
     return int(f * 255)
-
 
 class VirtualGamepad:
     def __init__(self):
@@ -140,7 +116,6 @@ class VirtualGamepad:
             self.ui.syn()
 
         elif mtype == "gyro":
-            # Réservé pour plus tard (viser à la souris, etc.)
             pass
 
         else:
@@ -149,7 +124,6 @@ class VirtualGamepad:
     def close(self):
         self.ui.close()
 
-
 def disable_nagle(websocket):
     try:
         sock = websocket.transport.get_extra_info("socket")
@@ -157,7 +131,6 @@ def disable_nagle(websocket):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     except Exception as exc:
         log.warning("TCP_NODELAY non appliqué: %s", exc)
-
 
 async def handler(websocket, gamepad: VirtualGamepad):
     disable_nagle(websocket)
@@ -179,10 +152,7 @@ async def handler(websocket, gamepad: VirtualGamepad):
     finally:
         log.info("iPhone déconnecté (%s)", peer)
 
-
 async def process_request(connection, request):
-    """Sert le fichier HTML sur les requêtes HTTP classiques.
-    Retourne None pour laisser passer les requêtes d'upgrade WebSocket."""
     if request.headers.get("Upgrade", "").lower() == "websocket":
         return None
 
@@ -196,7 +166,6 @@ async def process_request(connection, request):
 
     return Response(404, "Not Found", Headers(), b"Not Found")
 
-
 async def main(host="0.0.0.0", port=8765):
     gamepad = VirtualGamepad()
     try:
@@ -208,10 +177,9 @@ async def main(host="0.0.0.0", port=8765):
         ):
             log.info("Serveur sur http://%s:%d (page web + WebSocket sur le même port)", host, port)
             log.info("Un seul tunnel ngrok à faire pointer vers ce port.")
-            await asyncio.Future()  # tourne indéfiniment
+            await asyncio.Future()
     finally:
         gamepad.close()
-
 
 if __name__ == "__main__":
     try:
