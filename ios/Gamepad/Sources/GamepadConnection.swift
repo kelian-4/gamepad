@@ -43,13 +43,12 @@ final class GamepadConnection: ObservableObject {
         wsOptions.autoReplyPing = true
         params.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
 
-        let nwHost = NWEndpoint.Host(host)
-        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
-            status = .failed("Port invalide")
+        guard let url = URL(string: "ws://\(host):\(port)/") else {
+            status = .failed("Adresse invalide")
             return
         }
 
-        let conn = NWConnection(host: nwHost, port: nwPort, using: params)
+        let conn = NWConnection(to: .url(url), using: params)
         self.connection = conn
 
         conn.stateUpdateHandler = { [weak self] state in

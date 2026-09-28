@@ -15,7 +15,7 @@ struct ConnectView: View {
             VStack(spacing: 10) {
                 TextField("Adresse IP (ex: 192.168.1.42)", text: $state.serverHost)
                     .textFieldStyle(.roundedBorder)
-                    .keyboardType(.decimalPad)
+                    .keyboardType(.numbersAndPunctuation)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
 
