@@ -30,12 +30,22 @@ final class GamepadConnection: ObservableObject {
         shouldStayConnected = false
         reconnectTask?.cancel()
         reconnectTask = nil
-        connection?.cancel()
-        connection = nil
+        teardownCurrentConnection()
         status = .disconnected
     }
 
+    private func teardownCurrentConnection() {
+        guard let old = connection else { return }
+        connection = nil
+        old.stateUpdateHandler = nil
+        old.cancel()
+    }
+
     private func startConnection() {
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        teardownCurrentConnection()
+
         status = .connecting
 
         let params = NWParameters.tcp
@@ -49,21 +59,20 @@ final class GamepadConnection: ObservableObject {
         }
 
         let conn = NWConnection(to: .url(url), using: params)
-        self.connection = conn
+        connection = conn
 
-        conn.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
+        conn.stateUpdateHandler = { [weak self, weak conn] state in
             Task { @MainActor in
+                guard let self, let conn, self.connection === conn else { return }
                 switch state {
                 case .ready:
                     self.status = .connected
                 case .failed(let error):
+                    self.handleConnectionLoss(error.localizedDescription)
+                case .waiting(let error):
                     self.status = .failed(error.localizedDescription)
-                    self.scheduleReconnectIfNeeded()
                 case .cancelled:
-                    if self.status != .disconnected {
-                        self.status = .disconnected
-                    }
+                    break
                 default:
                     break
                 }
@@ -72,6 +81,12 @@ final class GamepadConnection: ObservableObject {
 
         conn.start(queue: queue)
         receiveLoop(on: conn)
+    }
+
+    private func handleConnectionLoss(_ message: String) {
+        teardownCurrentConnection()
+        status = .failed(message)
+        scheduleReconnectIfNeeded()
     }
 
     private func scheduleReconnectIfNeeded() {
@@ -85,19 +100,15 @@ final class GamepadConnection: ObservableObject {
     }
 
     private func receiveLoop(on conn: NWConnection) {
-        conn.receiveMessage { [weak self] _, _, isComplete, error in
-            guard let self else { return }
-            if let error {
-                Task { @MainActor in
-                    self.status = .failed(error.localizedDescription)
-                    self.scheduleReconnectIfNeeded()
+        conn.receiveMessage { [weak self, weak conn] _, _, _, error in
+            Task { @MainActor in
+                guard let self, let conn, self.connection === conn else { return }
+                if let error {
+                    self.handleConnectionLoss(error.localizedDescription)
+                    return
                 }
-                return
+                self.receiveLoop(on: conn)
             }
-            if !isComplete {
-                // Message partiel, on ignore côté client : on n'attend aucune réponse du serveur pour l'instant.
-            }
-            self.receiveLoop(on: conn)
         }
     }
 
@@ -113,6 +124,10 @@ final class GamepadConnection: ObservableObject {
 
     func sendTrigger(name: String, value: Double) {
         send(json: ["type": "trigger", "name": name, "value": value])
+    }
+
+    func sendDpad(x: Int, y: Int) {
+        send(json: ["type": "dpad", "x": x, "y": y])
     }
 
     private func send(json: [String: Any]) {
