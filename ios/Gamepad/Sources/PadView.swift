@@ -3,7 +3,9 @@ import SwiftUI
 struct PadView: View {
     @ObservedObject var connection: GamepadConnection
     @State private var layout = PadLayout.load()
+    @State private var settings = PadSettings.load()
     @State private var editing = false
+    @State private var showSettings = false
     @State private var bridge: PadBridge?
     @State private var surface: PadSurfaceView?
 
@@ -13,32 +15,57 @@ struct PadView: View {
                 Color.black.ignoresSafeArea()
 
                 if let bridge {
-                    PadSurface(layout: layout, editing: editing, delegate: bridge) { view in
+                    PadSurface(layout: layout, settings: settings, editing: editing, delegate: bridge) { view in
                         surface = view
                     }
                     .ignoresSafeArea()
                 }
 
-                topBar
+                statusBar
                     .padding(.top, geo.safeAreaInsets.top + 6)
                     .padding(.leading, max(geo.safeAreaInsets.leading, 16) + 8)
-                    .padding(.trailing, max(geo.safeAreaInsets.trailing, 16) + 8)
+
+                if editing {
+                    editBar
+                        .padding(.top, geo.safeAreaInsets.top + 6)
+                        .padding(.trailing, max(geo.safeAreaInsets.trailing, 16) + 8)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
             }
         }
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .onAppear {
             if bridge == nil {
-                bridge = PadBridge(connection: connection) { updated in
-                    layout = updated
-                    updated.save()
-                }
+                bridge = PadBridge(
+                    connection: connection,
+                    onLayout: { updated in
+                        layout = updated
+                        updated.save()
+                    },
+                    onOpenSettings: { showSettings = true }
+                )
             }
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(
+                settings: $settings,
+                onResetLayout: {
+                    PadLayout.resetSaved()
+                    layout = .standard
+                    surface?.layout = .standard
+                },
+                onEditLayout: {
+                    showSettings = false
+                    editing = true
+                },
+                onClose: { showSettings = false }
+            )
         }
     }
 
-    private var topBar: some View {
-        HStack(spacing: 10) {
+    private var statusBar: some View {
+        HStack(spacing: 8) {
             Circle()
                 .fill(statusColor)
                 .frame(width: 9, height: 9)
@@ -50,30 +77,18 @@ struct PadView: View {
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundColor(latencyColor(ms))
             }
-
-            Spacer()
-
-            if editing {
-                Button("Masquer / afficher") { surface?.toggleSelectedVisibility() }
-                    .font(.caption.bold())
-                Button("Réinitialiser") {
-                    PadLayout.resetSaved()
-                    layout = .standard
-                    surface?.layout = .standard
-                }
-                .font(.caption.bold())
-                Button("Terminer") { editing = false }
-                    .font(.caption.bold())
-                    .foregroundColor(.green)
-            } else {
-                Button {
-                    editing = true
-                } label: {
-                    Image(systemName: "slider.horizontal.3")
-                        .foregroundColor(.white.opacity(0.6))
-                }
-            }
         }
+    }
+
+    private var editBar: some View {
+        HStack(spacing: 14) {
+            Button("Masquer / afficher") { surface?.toggleSelectedVisibility() }
+                .font(.caption.bold())
+            Button("Terminer") { editing = false }
+                .font(.caption.bold())
+                .foregroundColor(.green)
+        }
+        .foregroundColor(.white.opacity(0.8))
     }
 
     private func latencyColor(_ ms: Int) -> Color {
@@ -106,10 +121,12 @@ struct PadView: View {
 final class PadBridge: PadSurfaceDelegate {
     private let connection: GamepadConnection
     private let onLayout: (PadLayout) -> Void
+    private let onOpenSettings: () -> Void
 
-    init(connection: GamepadConnection, onLayout: @escaping (PadLayout) -> Void) {
+    init(connection: GamepadConnection, onLayout: @escaping (PadLayout) -> Void, onOpenSettings: @escaping () -> Void) {
         self.connection = connection
         self.onLayout = onLayout
+        self.onOpenSettings = onOpenSettings
     }
 
     func button(_ name: String, pressed: Bool) {
@@ -126,6 +143,10 @@ final class PadBridge: PadSurfaceDelegate {
 
     func layoutChanged(_ layout: PadLayout) {
         onLayout(layout)
+    }
+
+    func openSettings() {
+        onOpenSettings()
     }
 }
 

@@ -21,7 +21,7 @@ struct PadElement: Codable, Identifiable, Equatable {
 struct PadLayout: Codable, Equatable {
     var elements: [PadElement]
 
-    static let storageKey = "gamepad.layout.v1"
+    static let storageKey = "gamepad.layout.v2"
 
     static var standard: PadLayout {
         PadLayout(elements: [
@@ -42,7 +42,8 @@ struct PadLayout: Codable, Equatable {
 
     static func load() -> PadLayout {
         guard let data = UserDefaults.standard.data(forKey: storageKey),
-              let saved = try? JSONDecoder().decode(PadLayout.self, from: data) else {
+              let saved = try? JSONDecoder().decode(PadLayout.self, from: data),
+              saved.isPlausible else {
             return .standard
         }
         var merged = saved
@@ -50,6 +51,14 @@ struct PadLayout: Codable, Equatable {
             merged.elements.append(element)
         }
         return merged
+    }
+
+    var isPlausible: Bool {
+        let ids = Set(elements.map(\.id))
+        guard ids == Set(standard.elements.map(\.id)) else { return false }
+        return elements.allSatisfy { el in
+            el.cx >= 0 && el.cx <= 1 && el.cy >= 0 && el.cy <= 1 && el.scale >= 0.4 && el.scale <= 2.5
+        }
     }
 
     func save() {

@@ -7,12 +7,17 @@ protocol PadSurfaceDelegate: AnyObject {
     func stick(_ name: String, x: Double, y: Double)
     func dpad(x: Int, y: Int)
     func layoutChanged(_ layout: PadLayout)
+    func openSettings()
 }
 
 final class PadSurfaceView: UIView {
     weak var delegate: PadSurfaceDelegate?
 
     var layout: PadLayout = .standard {
+        didSet { setNeedsDisplay() }
+    }
+
+    var settings: PadSettings = .standard {
         didSet { setNeedsDisplay() }
     }
 
@@ -37,6 +42,11 @@ final class PadSurfaceView: UIView {
     private var pinchStartScale = 1.0
     private let impact = UIImpactFeedbackGenerator(style: .rigid)
 
+    private func hapticTap() {
+        guard settings.hapticsEnabled else { return }
+        impact.impactOccurred()
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isMultipleTouchEnabled = true
@@ -51,8 +61,10 @@ final class PadSurfaceView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     private func element(at point: CGPoint) -> PadElement? {
-        layout.elements.reversed().first { el in
-            guard el.visible || editing else { return false }
+        layout.elements.reversed().first { el0 in
+            guard el0.visible || editing else { return false }
+            var el = el0
+            el.scale *= settings.globalScale
             let f = el.frame(in: bounds.size)
             switch el.kind {
             case .round, .stick, .dpad:
@@ -120,13 +132,18 @@ final class PadSurfaceView: UIView {
                 delegate?.layoutChanged(layout)
                 continue
             }
-            guard let el = layout.elements.first(where: { $0.id == id }) else { continue }
+            guard let el = layout.elements.first(where: { $0.id == id }), el.id != "mode" else { continue }
             disengage(el)
         }
         setNeedsDisplay()
     }
 
     private func engage(_ el: PadElement, at point: CGPoint) {
+        if el.id == "mode" {
+            hapticTap()
+            delegate?.openSettings()
+            return
+        }
         switch el.kind {
         case .round, .pill:
             press(el.id)
@@ -135,7 +152,9 @@ final class PadSurfaceView: UIView {
         }
     }
 
-    private func track(_ el: PadElement, at point: CGPoint) {
+    private func track(_ el0: PadElement, at point: CGPoint) {
+        var el = el0
+        el.scale *= settings.globalScale
         let f = el.frame(in: bounds.size)
         let c = CGPoint(x: f.midX, y: f.midY)
         switch el.kind {
@@ -160,7 +179,7 @@ final class PadSurfaceView: UIView {
                 if abs(dy) > abs(dx) * 0.6 { y = dy > 0 ? 1 : -1 }
             }
             if (x, y) != dpadState {
-                if x != 0 || y != 0 { impact.impactOccurred() }
+                if x != 0 || y != 0 { hapticTap() }
                 dpadState = (x, y)
                 delegate?.dpad(x: x, y: y)
             }
@@ -187,7 +206,7 @@ final class PadSurfaceView: UIView {
         pendingRelease[id] = nil
         if pressedSince[id] == nil {
             pressedSince[id] = CACurrentMediaTime()
-            impact.impactOccurred()
+            hapticTap()
             delegate?.button(id, pressed: true)
         }
     }
@@ -260,15 +279,30 @@ final class PadSurfaceView: UIView {
     var hasSelection: Bool { selectedID != nil }
 
     override func draw(_ rect: CGRect) {
-        let accent = UIColor.tintColor
+        let accent = UIColor(settings.preset.accent)
         let base = UIColor.white.withAlphaComponent(0.08)
         let stroke = UIColor.white.withAlphaComponent(0.18)
+        let globalScale = CGFloat(settings.globalScale)
 
-        for el in layout.elements {
+        for el0 in layout.elements {
+            var el = el0
+            el.scale *= Double(globalScale)
             if !el.visible && !editing { continue }
             let dim: CGFloat = el.visible ? 1 : 0.25
             let f = el.frame(in: bounds.size)
             let selected = editing && el.id == selectedID
+
+            if el.id == "mode" {
+                base.withAlphaComponent(0.1 * dim).setFill()
+                UIBezierPath(ovalIn: f).fill()
+                stroke.withAlphaComponent(0.22 * dim + (selected ? 0.5 : 0)).setStroke()
+                let ring = UIBezierPath(ovalIn: f)
+                ring.lineWidth = selected ? 2.5 : 1.5
+                ring.stroke()
+                drawSymbol(editing ? "slider.horizontal.3" : settings.preset.centerGlyph,
+                           in: f, color: UIColor.white.withAlphaComponent(0.75 * dim))
+                continue
+            }
 
             switch el.kind {
             case .round, .pill:
@@ -276,12 +310,21 @@ final class PadSurfaceView: UIView {
                 let path = el.kind == .round
                     ? UIBezierPath(ovalIn: f)
                     : UIBezierPath(roundedRect: f, cornerRadius: f.height / 2.4)
-                (pressed ? accent : base.withAlphaComponent(0.08 * dim + 0.0)).setFill()
+                let themedColor = settings.preset.buttonColor(for: el.id)
+                let fillColor: UIColor
+                if pressed {
+                    fillColor = accent
+                } else if let themedColor {
+                    fillColor = UIColor(themedColor).withAlphaComponent(0.22 * dim)
+                } else {
+                    fillColor = base.withAlphaComponent(0.08 * dim)
+                }
+                fillColor.setFill()
                 path.fill()
                 stroke.withAlphaComponent(0.18 * dim + (selected ? 0.5 : 0)).setStroke()
                 path.lineWidth = selected ? 2.5 : 1.5
                 path.stroke()
-                drawLabel(el.label, in: f,
+                drawLabel(settings.preset.label(for: el.id), in: f,
                           color: pressed ? .black : UIColor.white.withAlphaComponent(0.85 * dim),
                           size: (el.kind == .round ? 20 : 14) * CGFloat(el.scale))
 
@@ -323,6 +366,14 @@ final class PadSurfaceView: UIView {
         }
     }
 
+    private func drawSymbol(_ name: String, in rect: CGRect, color: UIColor) {
+        let config = UIImage.SymbolConfiguration(pointSize: rect.width * 0.4, weight: .semibold)
+        guard let image = UIImage(systemName: name, withConfiguration: config)?
+            .withTintColor(color, renderingMode: .alwaysOriginal) else { return }
+        let size = image.size
+        image.draw(at: CGPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2))
+    }
+
     private func drawLabel(_ text: String, in rect: CGRect, color: UIColor, size: CGFloat) {
         let attrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: size, weight: .bold),
@@ -336,6 +387,7 @@ final class PadSurfaceView: UIView {
 
 struct PadSurface: UIViewRepresentable {
     let layout: PadLayout
+    let settings: PadSettings
     let editing: Bool
     let delegate: PadSurfaceDelegate
     let onReady: (PadSurfaceView) -> Void
@@ -344,6 +396,7 @@ struct PadSurface: UIViewRepresentable {
         let v = PadSurfaceView()
         v.delegate = delegate
         v.layout = layout
+        v.settings = settings
         v.editing = editing
         DispatchQueue.main.async { onReady(v) }
         return v
@@ -353,5 +406,6 @@ struct PadSurface: UIViewRepresentable {
         uiView.delegate = delegate
         if uiView.editing != editing { uiView.editing = editing }
         if !editing && uiView.layout != layout { uiView.layout = layout }
+        if uiView.settings != settings { uiView.settings = settings }
     }
 }
