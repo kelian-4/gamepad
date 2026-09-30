@@ -55,7 +55,7 @@ struct PadLayout: Codable, Equatable {
 
     var isPlausible: Bool {
         let ids = Set(elements.map(\.id))
-        guard ids == Set(standard.elements.map(\.id)) else { return false }
+        guard ids == Set(PadLayout.standard.elements.map(\.id)) else { return false }
         return elements.allSatisfy { el in
             el.cx >= 0 && el.cx <= 1 && el.cy >= 0 && el.cy <= 1 && el.scale >= 0.4 && el.scale <= 2.5
         }
