@@ -8,6 +8,7 @@ protocol PadSurfaceDelegate: AnyObject {
     func dpad(x: Int, y: Int)
     func layoutChanged(_ layout: PadLayout)
     func openSettings()
+    func selectionChanged(_ id: String?)
 }
 
 final class PadSurfaceView: UIView {
@@ -36,7 +37,11 @@ final class PadSurfaceView: UIView {
     private var pendingRelease: [String: DispatchWorkItem] = [:]
     private var stickOffsets: [String: CGPoint] = [:]
     private var dpadState: (Int, Int) = (0, 0)
-    private var selectedID: String?
+    private var selectedID: String? {
+        didSet {
+            if oldValue != selectedID { delegate?.selectionChanged(selectedID) }
+        }
+    }
     private var dragOrigin: [ObjectIdentifier: (cx: Double, cy: Double, point: CGPoint)] = [:]
     private var pinch: UIPinchGestureRecognizer?
     private var pinchStartScale = 1.0
@@ -109,9 +114,26 @@ final class PadSurfaceView: UIView {
                 layout.elements[idx].cx = min(max(nx, 0.03), 0.97)
                 layout.elements[idx].cy = min(max(ny, 0.05), 0.95)
             } else {
-                track(layout.elements[idx], at: point)
+                let el = layout.elements[idx]
+                switch el.kind {
+                case .round, .pill:
+                    var scaled = el
+                    scaled.scale *= settings.globalScale
+                    let f = scaled.frame(in: bounds.size)
+                    let c = CGPoint(x: f.midX, y: f.midY)
+                    let stillInside = el.kind == .round
+                        ? hypot(point.x - c.x, point.y - c.y) <= f.width / 2 + 8
+                        : f.insetBy(dx: -8, dy: -8).contains(point)
+                    if !stillInside {
+                        touchTargets.removeValue(forKey: key)
+                        release(el.id)
+                    }
+                case .stick, .dpad:
+                    track(el, at: point)
+                }
             }
         }
+        reconcileStaleButtons()
         setNeedsDisplay()
     }
 
@@ -135,7 +157,15 @@ final class PadSurfaceView: UIView {
             guard let el = layout.elements.first(where: { $0.id == id }), el.id != "mode" else { continue }
             disengage(el)
         }
+        reconcileStaleButtons()
         setNeedsDisplay()
+    }
+
+    private func reconcileStaleButtons() {
+        let activeIDs = Set(touchTargets.values)
+        for id in Array(pressedSince.keys) where !activeIDs.contains(id) && pendingRelease[id] == nil {
+            release(id)
+        }
     }
 
     private func engage(_ el: PadElement, at point: CGPoint) {
@@ -276,7 +306,21 @@ final class PadSurfaceView: UIView {
         setNeedsDisplay()
     }
 
+    func setSelectedScale(_ scale: Double) {
+        guard let id = selectedID,
+              let idx = layout.elements.firstIndex(where: { $0.id == id }) else { return }
+        layout.elements[idx].scale = min(max(scale, 0.5), 2.2)
+        delegate?.layoutChanged(layout)
+        setNeedsDisplay()
+    }
+
+    var selectedScale: Double? {
+        guard let id = selectedID else { return nil }
+        return layout.elements.first(where: { $0.id == id })?.scale
+    }
+
     var hasSelection: Bool { selectedID != nil }
+    var selectionLabel: String? { selectedID }
 
     override func draw(_ rect: CGRect) {
         let accent = UIColor(settings.preset.accent)

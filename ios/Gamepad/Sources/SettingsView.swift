@@ -34,6 +34,19 @@ struct SettingsView: View {
                     Toggle("Vibrations", isOn: $settings.hapticsEnabled)
                 }
 
+                Section("Fond") {
+                    Picker("Fond", selection: $settings.background) {
+                        ForEach(PadBackground.allCases) { bg in
+                            HStack {
+                                Circle().fill(bg.color).frame(width: 16, height: 16)
+                                Text(bg.title)
+                            }
+                            .tag(bg)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                }
+
                 Section("Disposition") {
                     Button("Modifier la disposition") { onEditLayout() }
                     Button("Réinitialiser la disposition", role: .destructive) { onResetLayout() }

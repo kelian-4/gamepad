@@ -65,15 +65,46 @@ enum PadPreset: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum PadBackground: String, Codable, CaseIterable, Identifiable {
+    case black
+    case charcoal
+    case navy
+    case forest
+    case plum
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .black: return "Noir"
+        case .charcoal: return "Anthracite"
+        case .navy: return "Marine"
+        case .forest: return "Forêt"
+        case .plum: return "Prune"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .black: return .black
+        case .charcoal: return Color(red: 0.11, green: 0.11, blue: 0.13)
+        case .navy: return Color(red: 0.05, green: 0.08, blue: 0.16)
+        case .forest: return Color(red: 0.05, green: 0.12, blue: 0.09)
+        case .plum: return Color(red: 0.14, green: 0.06, blue: 0.14)
+        }
+    }
+}
+
 struct PadSettings: Codable, Equatable {
     var preset: PadPreset
     var globalScale: Double
     var hapticsEnabled: Bool
+    var background: PadBackground
 
     static let storageKey = "gamepad.settings.v1"
 
     static var standard: PadSettings {
-        PadSettings(preset: .xbox, globalScale: 1.0, hapticsEnabled: true)
+        PadSettings(preset: .xbox, globalScale: 1.0, hapticsEnabled: true, background: .black)
     }
 
     static func load() -> PadSettings {

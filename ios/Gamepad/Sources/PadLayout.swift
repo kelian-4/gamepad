@@ -32,8 +32,8 @@ struct PadLayout: Codable, Equatable {
             PadElement(id: "x", kind: .round, label: "X", cx: 0.73, cy: 0.40, scale: 1, visible: true),
             PadElement(id: "b", kind: .round, label: "B", cx: 0.87, cy: 0.40, scale: 1, visible: true),
             PadElement(id: "a", kind: .round, label: "A", cx: 0.80, cy: 0.60, scale: 1, visible: true),
-            PadElement(id: "l1", kind: .pill, label: "LB", cx: 0.12, cy: 0.09, scale: 1, visible: true),
-            PadElement(id: "r1", kind: .pill, label: "RB", cx: 0.88, cy: 0.09, scale: 1, visible: true),
+            PadElement(id: "l1", kind: .pill, label: "LB", cx: 0.14, cy: 0.16, scale: 1, visible: true),
+            PadElement(id: "r1", kind: .pill, label: "RB", cx: 0.86, cy: 0.16, scale: 1, visible: true),
             PadElement(id: "mode", kind: .round, label: "◉", cx: 0.50, cy: 0.38, scale: 0.75, visible: true),
             PadElement(id: "select", kind: .pill, label: "VIEW", cx: 0.44, cy: 0.56, scale: 0.8, visible: true),
             PadElement(id: "start", kind: .pill, label: "MENU", cx: 0.56, cy: 0.56, scale: 0.8, visible: true)
@@ -49,6 +49,16 @@ struct PadLayout: Codable, Equatable {
         var merged = saved
         for element in standard.elements where !merged.elements.contains(where: { $0.id == element.id }) {
             merged.elements.append(element)
+        }
+        let legacyShoulderPositions: [(String, Double, Double)] = [("l1", 0.12, 0.09), ("r1", 0.88, 0.09)]
+        for (id, oldCx, oldCy) in legacyShoulderPositions {
+            if let idx = merged.elements.firstIndex(where: { $0.id == id }),
+               abs(merged.elements[idx].cx - oldCx) < 0.001,
+               abs(merged.elements[idx].cy - oldCy) < 0.001,
+               let fresh = standard.elements.first(where: { $0.id == id }) {
+                merged.elements[idx].cx = fresh.cx
+                merged.elements[idx].cy = fresh.cy
+            }
         }
         return merged
     }

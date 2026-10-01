@@ -8,11 +8,12 @@ struct PadView: View {
     @State private var showSettings = false
     @State private var bridge: PadBridge?
     @State private var surface: PadSurfaceView?
+    @State private var selectedScale: Double?
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
-                Color.black.ignoresSafeArea()
+                settings.background.color.ignoresSafeArea()
 
                 if let bridge {
                     PadSurface(layout: layout, settings: settings, editing: editing, delegate: bridge) { view in
@@ -42,8 +43,16 @@ struct PadView: View {
                     onLayout: { updated in
                         layout = updated
                         updated.save()
+                        if let id = surface?.selectionLabel {
+                            selectedScale = updated.elements.first(where: { $0.id == id })?.scale
+                        }
                     },
-                    onOpenSettings: { showSettings = true }
+                    onOpenSettings: { showSettings = true },
+                    onSelectionChanged: { id in
+                        selectedScale = id.flatMap { selId in
+                            layout.elements.first(where: { $0.id == selId })?.scale
+                        }
+                    }
                 )
             }
         }
@@ -71,24 +80,47 @@ struct PadView: View {
                 .frame(width: 9, height: 9)
             Text(statusText)
                 .font(.caption2)
-                .foregroundColor(.white.opacity(0.55))
+                .foregroundColor(.white.opacity(0.85))
             if let ms = connection.latencyMs {
                 Text("\(ms) ms")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundColor(latencyColor(ms))
             }
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Capsule().fill(Color.black.opacity(0.75)))
     }
 
     private var editBar: some View {
-        HStack(spacing: 14) {
-            Button("Masquer / afficher") { surface?.toggleSelectedVisibility() }
-                .font(.caption.bold())
-            Button("Terminer") { editing = false }
-                .font(.caption.bold())
-                .foregroundColor(.green)
+        VStack(alignment: .trailing, spacing: 8) {
+            HStack(spacing: 14) {
+                Button("Masquer / afficher") { surface?.toggleSelectedVisibility() }
+                    .font(.caption.bold())
+                Button("Terminer") { editing = false }
+                    .font(.caption.bold())
+                    .foregroundColor(.green)
+            }
+            .foregroundColor(.white.opacity(0.9))
+
+            if let scale = selectedScale {
+                HStack(spacing: 8) {
+                    Image(systemName: "minus.magnifyingglass").font(.caption2)
+                    Slider(
+                        value: Binding(
+                            get: { scale },
+                            set: { surface?.setSelectedScale($0) }
+                        ),
+                        in: 0.5...2.2
+                    )
+                    .frame(width: 140)
+                    Image(systemName: "plus.magnifyingglass").font(.caption2)
+                }
+                .foregroundColor(.white.opacity(0.8))
+            }
         }
-        .foregroundColor(.white.opacity(0.8))
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.black.opacity(0.75)))
     }
 
     private func latencyColor(_ ms: Int) -> Color {
@@ -122,11 +154,16 @@ final class PadBridge: PadSurfaceDelegate {
     private let connection: GamepadConnection
     private let onLayout: (PadLayout) -> Void
     private let onOpenSettings: () -> Void
+    private let onSelectionChanged: (String?) -> Void
 
-    init(connection: GamepadConnection, onLayout: @escaping (PadLayout) -> Void, onOpenSettings: @escaping () -> Void) {
+    init(connection: GamepadConnection,
+         onLayout: @escaping (PadLayout) -> Void,
+         onOpenSettings: @escaping () -> Void,
+         onSelectionChanged: @escaping (String?) -> Void) {
         self.connection = connection
         self.onLayout = onLayout
         self.onOpenSettings = onOpenSettings
+        self.onSelectionChanged = onSelectionChanged
     }
 
     func button(_ name: String, pressed: Bool) {
@@ -147,6 +184,10 @@ final class PadBridge: PadSurfaceDelegate {
 
     func openSettings() {
         onOpenSettings()
+    }
+
+    func selectionChanged(_ id: String?) {
+        onSelectionChanged(id)
     }
 }
 
