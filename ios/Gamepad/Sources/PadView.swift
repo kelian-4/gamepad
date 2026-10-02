@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct PadView: View {
     @ObservedObject var connection: GamepadConnection
@@ -9,11 +10,13 @@ struct PadView: View {
     @State private var bridge: PadBridge?
     @State private var surface: PadSurfaceView?
     @State private var selectedScale: Double?
+    @State private var customBackgroundImage: UIImage? = CustomBackgroundStorage.load()
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
-                settings.background.color.ignoresSafeArea()
+                backgroundView(in: geo.size)
+                    .ignoresSafeArea()
 
                 if let bridge {
                     PadSurface(layout: layout, settings: settings, editing: editing, delegate: bridge) { view in
@@ -68,8 +71,25 @@ struct PadView: View {
                     showSettings = false
                     editing = true
                 },
-                onClose: { showSettings = false }
+                onClose: { showSettings = false },
+                onBackgroundImageChanged: {
+                    customBackgroundImage = CustomBackgroundStorage.load()
+                }
             )
+        }
+    }
+
+    @ViewBuilder
+    private func backgroundView(in size: CGSize) -> some View {
+        if settings.background == .custom, let customBackgroundImage {
+            Image(uiImage: customBackgroundImage)
+                .resizable()
+                .scaledToFill()
+                .frame(width: size.width, height: size.height)
+                .clipped()
+                .overlay(Color.black.opacity(0.35))
+        } else {
+            settings.background.color
         }
     }
 

@@ -1,10 +1,15 @@
 import SwiftUI
+import PhotosUI
 
 struct SettingsView: View {
     @Binding var settings: PadSettings
     let onResetLayout: () -> Void
     let onEditLayout: () -> Void
     let onClose: () -> Void
+    let onBackgroundImageChanged: () -> Void
+
+    @State private var photoItem: PhotosPickerItem?
+    @State private var hasCustomImage = CustomBackgroundStorage.exists
 
     var body: some View {
         NavigationStack {
@@ -36,7 +41,7 @@ struct SettingsView: View {
 
                 Section("Fond") {
                     Picker("Fond", selection: $settings.background) {
-                        ForEach(PadBackground.allCases) { bg in
+                        ForEach(PadBackground.allCases.filter { $0 != .custom }) { bg in
                             HStack {
                                 Circle().fill(bg.color).frame(width: 16, height: 16)
                                 Text(bg.title)
@@ -45,6 +50,33 @@ struct SettingsView: View {
                         }
                     }
                     .pickerStyle(.inline)
+
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        HStack {
+                            Image(systemName: "photo")
+                            Text(hasCustomImage ? "Changer la photo" : "Choisir une photo")
+                        }
+                    }
+                    .onChange(of: photoItem) { newItem in
+                        guard let newItem else { return }
+                        Task {
+                            guard let data = try? await newItem.loadTransferable(type: Data.self),
+                                  let image = UIImage(data: data) else { return }
+                            CustomBackgroundStorage.save(image)
+                            hasCustomImage = true
+                            settings.background = .custom
+                            onBackgroundImageChanged()
+                        }
+                    }
+
+                    if hasCustomImage {
+                        Button("Supprimer la photo de fond", role: .destructive) {
+                            CustomBackgroundStorage.clear()
+                            hasCustomImage = false
+                            if settings.background == .custom { settings.background = .black }
+                            onBackgroundImageChanged()
+                        }
+                    }
                 }
 
                 Section("Disposition") {
@@ -65,5 +97,5 @@ struct SettingsView: View {
 }
 
 #Preview {
-    SettingsView(settings: .constant(.standard), onResetLayout: {}, onEditLayout: {}, onClose: {})
+    SettingsView(settings: .constant(.standard), onResetLayout: {}, onEditLayout: {}, onClose: {}, onBackgroundImageChanged: {})
 }

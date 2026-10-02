@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum PadPreset: String, Codable, CaseIterable, Identifiable {
     case xbox
@@ -71,6 +72,7 @@ enum PadBackground: String, Codable, CaseIterable, Identifiable {
     case navy
     case forest
     case plum
+    case custom
 
     var id: String { rawValue }
 
@@ -81,6 +83,7 @@ enum PadBackground: String, Codable, CaseIterable, Identifiable {
         case .navy: return "Marine"
         case .forest: return "Forêt"
         case .plum: return "Prune"
+        case .custom: return "Photo"
         }
     }
 
@@ -91,7 +94,33 @@ enum PadBackground: String, Codable, CaseIterable, Identifiable {
         case .navy: return Color(red: 0.05, green: 0.08, blue: 0.16)
         case .forest: return Color(red: 0.05, green: 0.12, blue: 0.09)
         case .plum: return Color(red: 0.14, green: 0.06, blue: 0.14)
+        case .custom: return .black
         }
+    }
+}
+
+enum CustomBackgroundStorage {
+    private static var fileURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("background_custom.jpg")
+    }
+
+    static func save(_ image: UIImage) {
+        guard let data = image.jpegData(compressionQuality: 0.85) else { return }
+        try? data.write(to: fileURL, options: .atomic)
+    }
+
+    static func load() -> UIImage? {
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        return UIImage(data: data)
+    }
+
+    static func clear() {
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+
+    static var exists: Bool {
+        FileManager.default.fileExists(atPath: fileURL.path)
     }
 }
 
