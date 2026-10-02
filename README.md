@@ -28,4 +28,4 @@ Si la latence augmente fortement en jeu (centaines de ms, voire plusieurs second
 sudo chrt -r 10 python3 server/gamepad_server.py
 ```
 
-`chrt` nécessite root ou la capacité `CAP_SYS_NICE`. Le serveur affiche désormais, dans ses logs, le temps de traitement de chaque message (`perf: ... ms`) toutes les 200 messages ou si un message dépasse 50 ms à traiter : si ce chiffre reste bas malgré une latence ressentie élevée côté téléphone, la cause est hors du traitement lui-même (scheduling, réseau, ou accumulation de messages en attente), pas le code du serveur.
+`chrt` nécessite root ou la capacité `CAP_SYS_NICE`. Confirmé en conditions réelles (jeu lourd) : sans `chrt`, latence de 400 à 2000 ms ; avec `chrt -r 10`, jeu fluide. Le traitement d'un message par le serveur lui-même ne dépassait jamais 1 ms pendant ces tests, la cause était donc bien le scheduling du processus sous charge CPU, pas le code du serveur.
