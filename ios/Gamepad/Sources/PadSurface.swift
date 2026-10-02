@@ -59,6 +59,8 @@ final class PadSurfaceView: UIView {
         impact.prepare()
         let recognizer = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         recognizer.cancelsTouchesInView = false
+        recognizer.delaysTouchesBegan = false
+        recognizer.delaysTouchesEnded = false
         addGestureRecognizer(recognizer)
         pinch = recognizer
     }

@@ -85,9 +85,7 @@ class VirtualGamepad:
             if code is None:
                 log.warning("Bouton inconnu: %s", name)
                 return
-            pressed = bool(msg.get("pressed"))
-            log.info("BOUTON %s -> %s", name, "down" if pressed else "up")
-            self.ui.write(e.EV_KEY, code, 1 if pressed else 0)
+            self.ui.write(e.EV_KEY, code, 1 if msg.get("pressed") else 0)
             self.ui.syn()
 
         elif mtype == "stick":
