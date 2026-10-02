@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import socket
+import time
 
 import websockets
 from websockets.http11 import Response
@@ -132,12 +133,16 @@ def disable_nagle(websocket):
     except Exception as exc:
         log.warning("TCP_NODELAY non appliqué: %s", exc)
 
+QUEUE_WARN_THRESHOLD_MS = 50
+
 async def handler(websocket, gamepad: VirtualGamepad):
     disable_nagle(websocket)
     peer = websocket.remote_address
     log.info("iPhone connecté depuis %s", peer)
+    message_count = 0
     try:
         async for raw in websocket:
+            receive_time = time.monotonic()
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
@@ -147,6 +152,14 @@ async def handler(websocket, gamepad: VirtualGamepad):
                 await websocket.send(raw)
                 continue
             gamepad.handle_message(msg)
+            processed_time = time.monotonic()
+            process_ms = (processed_time - receive_time) * 1000
+            message_count += 1
+            if message_count % 200 == 0 or process_ms > QUEUE_WARN_THRESHOLD_MS:
+                log.info(
+                    "perf: %d messages traités, dernier traitement %.2f ms (type=%s)",
+                    message_count, process_ms, msg.get("type"),
+                )
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:

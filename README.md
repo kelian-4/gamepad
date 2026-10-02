@@ -19,3 +19,13 @@ Pour installer sur un iPhone : télécharger le `.ipa` depuis les artifacts du r
 
 1. Sur la machine Linux (NixOS) : `python3 server/gamepad_server.py`
 2. Sur le téléphone : ouvrir l'app, entrer l'IP locale de la machine + le port (8765 par défaut), se connecter.
+
+### Latence sous forte charge CPU (jeu lourd)
+
+Si la latence augmente fortement en jeu (centaines de ms, voire plusieurs secondes), le serveur se fait probablement déclasser par le scheduler Linux par défaut (`SCHED_OTHER`), qui privilégie l'équité entre processus plutôt que la latence d'un processus I/O-bound comme celui-ci. Lancer le serveur avec une priorité temps réel modérée règle ça :
+
+```fish
+sudo chrt -r 10 python3 server/gamepad_server.py
+```
+
+`chrt` nécessite root ou la capacité `CAP_SYS_NICE`. Le serveur affiche désormais, dans ses logs, le temps de traitement de chaque message (`perf: ... ms`) toutes les 200 messages ou si un message dépasse 50 ms à traiter : si ce chiffre reste bas malgré une latence ressentie élevée côté téléphone, la cause est hors du traitement lui-même (scheduling, réseau, ou accumulation de messages en attente), pas le code du serveur.
