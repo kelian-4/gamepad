@@ -23,21 +23,41 @@ struct PadLayout: Codable, Equatable {
 
     static let storageKey = "gamepad.layout.v2"
 
-    static var standard: PadLayout {
-        PadLayout(elements: [
-            PadElement(id: "left", kind: .stick, label: "", cx: 0.20, cy: 0.42, scale: 1, visible: true),
-            PadElement(id: "dpad", kind: .dpad, label: "", cx: 0.30, cy: 0.80, scale: 1, visible: true),
-            PadElement(id: "right", kind: .stick, label: "", cx: 0.70, cy: 0.80, scale: 1, visible: true),
-            PadElement(id: "y", kind: .round, label: "Y", cx: 0.80, cy: 0.20, scale: 1, visible: true),
-            PadElement(id: "x", kind: .round, label: "X", cx: 0.73, cy: 0.40, scale: 1, visible: true),
-            PadElement(id: "b", kind: .round, label: "B", cx: 0.87, cy: 0.40, scale: 1, visible: true),
-            PadElement(id: "a", kind: .round, label: "A", cx: 0.80, cy: 0.60, scale: 1, visible: true),
-            PadElement(id: "l1", kind: .pill, label: "LB", cx: 0.14, cy: 0.16, scale: 1, visible: true),
-            PadElement(id: "r1", kind: .pill, label: "RB", cx: 0.86, cy: 0.16, scale: 1, visible: true),
-            PadElement(id: "mode", kind: .round, label: "◉", cx: 0.50, cy: 0.38, scale: 0.75, visible: true),
-            PadElement(id: "select", kind: .pill, label: "VIEW", cx: 0.44, cy: 0.56, scale: 0.8, visible: true),
-            PadElement(id: "start", kind: .pill, label: "MENU", cx: 0.56, cy: 0.56, scale: 0.8, visible: true)
-        ])
+    static var standard: PadLayout { layout(for: .xbox) }
+
+    static func layout(for preset: PadPreset) -> PadLayout {
+        switch preset {
+        case .xbox, .custom:
+            return PadLayout(elements: [
+                PadElement(id: "left", kind: .stick, label: "", cx: 0.20, cy: 0.42, scale: 1, visible: true),
+                PadElement(id: "dpad", kind: .dpad, label: "", cx: 0.30, cy: 0.80, scale: 1, visible: true),
+                PadElement(id: "right", kind: .stick, label: "", cx: 0.70, cy: 0.80, scale: 1, visible: true),
+                PadElement(id: "y", kind: .round, label: "Y", cx: 0.80, cy: 0.20, scale: 1, visible: true),
+                PadElement(id: "x", kind: .round, label: "X", cx: 0.73, cy: 0.40, scale: 1, visible: true),
+                PadElement(id: "b", kind: .round, label: "B", cx: 0.87, cy: 0.40, scale: 1, visible: true),
+                PadElement(id: "a", kind: .round, label: "A", cx: 0.80, cy: 0.60, scale: 1, visible: true),
+                PadElement(id: "l1", kind: .pill, label: "LB", cx: 0.14, cy: 0.16, scale: 1, visible: true),
+                PadElement(id: "r1", kind: .pill, label: "RB", cx: 0.86, cy: 0.16, scale: 1, visible: true),
+                PadElement(id: "mode", kind: .round, label: "◉", cx: 0.50, cy: 0.38, scale: 0.75, visible: true),
+                PadElement(id: "select", kind: .pill, label: "VIEW", cx: 0.44, cy: 0.56, scale: 0.8, visible: true),
+                PadElement(id: "start", kind: .pill, label: "MENU", cx: 0.56, cy: 0.56, scale: 0.8, visible: true)
+            ])
+        case .playstation:
+            return PadLayout(elements: [
+                PadElement(id: "left", kind: .stick, label: "", cx: 0.20, cy: 0.80, scale: 1, visible: true),
+                PadElement(id: "dpad", kind: .dpad, label: "", cx: 0.30, cy: 0.42, scale: 1, visible: true),
+                PadElement(id: "right", kind: .stick, label: "", cx: 0.70, cy: 0.80, scale: 1, visible: true),
+                PadElement(id: "y", kind: .round, label: "Y", cx: 0.80, cy: 0.20, scale: 1, visible: true),
+                PadElement(id: "x", kind: .round, label: "X", cx: 0.73, cy: 0.40, scale: 1, visible: true),
+                PadElement(id: "b", kind: .round, label: "B", cx: 0.87, cy: 0.40, scale: 1, visible: true),
+                PadElement(id: "a", kind: .round, label: "A", cx: 0.80, cy: 0.60, scale: 1, visible: true),
+                PadElement(id: "l1", kind: .pill, label: "LB", cx: 0.14, cy: 0.16, scale: 1, visible: true),
+                PadElement(id: "r1", kind: .pill, label: "RB", cx: 0.86, cy: 0.16, scale: 1, visible: true),
+                PadElement(id: "mode", kind: .round, label: "◉", cx: 0.50, cy: 0.38, scale: 0.75, visible: true),
+                PadElement(id: "select", kind: .pill, label: "VIEW", cx: 0.44, cy: 0.56, scale: 0.8, visible: true),
+                PadElement(id: "start", kind: .pill, label: "MENU", cx: 0.56, cy: 0.56, scale: 0.8, visible: true)
+            ])
+        }
     }
 
     static func load() -> PadLayout {
@@ -69,6 +89,17 @@ struct PadLayout: Codable, Equatable {
         return elements.allSatisfy { el in
             el.cx >= 0 && el.cx <= 1 && el.cy >= 0 && el.cy <= 1 && el.scale >= 0.4 && el.scale <= 2.5
         }
+    }
+
+    func matchesPositions(of other: PadLayout) -> Bool {
+        let tolerance = 0.005
+        for element in elements {
+            guard let match = other.elements.first(where: { $0.id == element.id }) else { return false }
+            if abs(element.cx - match.cx) > tolerance || abs(element.cy - match.cy) > tolerance {
+                return false
+            }
+        }
+        return true
     }
 
     func save() {

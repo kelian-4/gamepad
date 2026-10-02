@@ -11,6 +11,7 @@ struct PadView: View {
     @State private var surface: PadSurfaceView?
     @State private var selectedScale: Double?
     @State private var customBackgroundImage: UIImage? = CustomBackgroundStorage.load()
+    @State private var pendingPresetLayoutChange: PadPreset?
 
     var body: some View {
         GeometryReader { geo in
@@ -76,6 +77,38 @@ struct PadView: View {
                     customBackgroundImage = CustomBackgroundStorage.load()
                 }
             )
+        }
+        .onChange(of: settings.preset) { newPreset in
+            guard newPreset == .xbox || newPreset == .playstation else { return }
+            let referenceLayouts: [PadPreset] = [.xbox, .playstation]
+            let matchesAnyReference = referenceLayouts.contains { layout.matchesPositions(of: PadLayout.layout(for: $0)) }
+            if matchesAnyReference {
+                layout = PadLayout.layout(for: newPreset)
+                layout.save()
+                surface?.layout = layout
+            } else {
+                pendingPresetLayoutChange = newPreset
+            }
+        }
+        .alert(
+            "Appliquer la disposition \(pendingPresetLayoutChange?.title ?? "") ?",
+            isPresented: Binding(
+                get: { pendingPresetLayoutChange != nil },
+                set: { if !$0 { pendingPresetLayoutChange = nil } }
+            ),
+            presenting: pendingPresetLayoutChange
+        ) { preset in
+            Button("Remplacer", role: .destructive) {
+                layout = PadLayout.layout(for: preset)
+                layout.save()
+                surface?.layout = layout
+                pendingPresetLayoutChange = nil
+            }
+            Button("Garder ma disposition", role: .cancel) {
+                pendingPresetLayoutChange = nil
+            }
+        } message: { _ in
+            Text("Tu as déjà déplacé des éléments. Changer de preset peut aussi repositionner le stick et la croix pour correspondre à la vraie manette. Choisis quoi faire de ta disposition actuelle.")
         }
     }
 
