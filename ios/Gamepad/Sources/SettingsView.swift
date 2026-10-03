@@ -10,6 +10,8 @@ struct SettingsView: View {
 
     @State private var photoItem: PhotosPickerItem?
     @State private var hasCustomImage = CustomBackgroundStorage.exists
+    @State private var pendingBackground: PadBackground?
+    @State private var pendingImage: UIImage?
 
     var body: some View {
         NavigationStack {
@@ -40,7 +42,13 @@ struct SettingsView: View {
                 }
 
                 Section("Fond") {
-                    Picker("Fond", selection: $settings.background) {
+                    Picker("Fond", selection: Binding(
+                        get: { settings.background },
+                        set: { newValue in
+                            guard newValue != settings.background else { return }
+                            pendingBackground = newValue
+                        }
+                    )) {
                         ForEach(PadBackground.allCases.filter { $0 != .custom }) { bg in
                             HStack {
                                 Circle().fill(bg.color).frame(width: 16, height: 16)
@@ -62,10 +70,7 @@ struct SettingsView: View {
                         Task {
                             guard let data = try? await newItem.loadTransferable(type: Data.self),
                                   let image = UIImage(data: data) else { return }
-                            CustomBackgroundStorage.save(image)
-                            hasCustomImage = true
-                            settings.background = .custom
-                            onBackgroundImageChanged()
+                            pendingImage = image
                         }
                     }
 
@@ -93,6 +98,48 @@ struct SettingsView: View {
             }
         }
         .onChange(of: settings) { newValue in newValue.save() }
+        .alert(
+            "Changer le fond ?",
+            isPresented: Binding(
+                get: { pendingBackground != nil },
+                set: { if !$0 { pendingBackground = nil } }
+            ),
+            presenting: pendingBackground
+        ) { newBackground in
+            Button("Appliquer") {
+                settings.background = newBackground
+                pendingBackground = nil
+            }
+            Button("Annuler", role: .cancel) {
+                pendingBackground = nil
+            }
+        } message: { newBackground in
+            Text("Remplacer le fond actuel par « \(newBackground.title) » ?")
+        }
+        .alert(
+            "Utiliser cette photo comme fond ?",
+            isPresented: Binding(
+                get: { pendingImage != nil },
+                set: { if !$0 { pendingImage = nil; photoItem = nil } }
+            )
+        ) {
+            Button("Appliquer") {
+                if let image = pendingImage {
+                    CustomBackgroundStorage.save(image)
+                    hasCustomImage = true
+                    settings.background = .custom
+                    onBackgroundImageChanged()
+                }
+                pendingImage = nil
+                photoItem = nil
+            }
+            Button("Annuler", role: .cancel) {
+                pendingImage = nil
+                photoItem = nil
+            }
+        } message: {
+            Text("Cette photo remplacera le fond actuel.")
+        }
     }
 }
 

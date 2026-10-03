@@ -5,6 +5,7 @@ enum ConnectionStatus: Equatable {
     case disconnected
     case connecting
     case connected
+    case reconnecting(attempt: Int)
     case failed(String)
 }
 
@@ -20,6 +21,9 @@ final class GamepadConnection: ObservableObject {
     private var port: UInt16 = 8765
     private var reconnectTask: Task<Void, Never>?
     private var shouldStayConnected = false
+    private var reconnectAttempt = 0
+    private static let maxReconnectDelay: UInt64 = 10_000_000_000
+    private static let baseReconnectDelay: UInt64 = 500_000_000
 
     private var pingTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
@@ -41,11 +45,13 @@ final class GamepadConnection: ObservableObject {
         self.host = host
         self.port = port
         shouldStayConnected = true
+        reconnectAttempt = 0
         startConnection()
     }
 
     func disconnect() {
         shouldStayConnected = false
+        reconnectAttempt = 0
         reconnectTask?.cancel()
         reconnectTask = nil
         teardownCurrentConnection()
@@ -97,6 +103,7 @@ final class GamepadConnection: ObservableObject {
                     self.log("prêt")
                     self.timeoutTask?.cancel()
                     self.timeoutTask = nil
+                    self.reconnectAttempt = 0
                     self.status = .connected
                     self.startPing()
                 case .failed(let error):
@@ -132,15 +139,24 @@ final class GamepadConnection: ObservableObject {
 
     private func handleConnectionLoss(_ message: String) {
         teardownCurrentConnection()
-        status = .failed(message)
+        if shouldStayConnected {
+            reconnectAttempt += 1
+            status = .reconnecting(attempt: reconnectAttempt)
+            log("perte de connexion: \(message)")
+        } else {
+            status = .failed(message)
+        }
         scheduleReconnectIfNeeded()
     }
 
     private func scheduleReconnectIfNeeded() {
         guard shouldStayConnected else { return }
         reconnectTask?.cancel()
+        let exponent = min(reconnectAttempt, 5)
+        let scaled = Self.baseReconnectDelay * UInt64(1 << exponent)
+        let delay = min(scaled, Self.maxReconnectDelay)
         reconnectTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            try? await Task.sleep(nanoseconds: delay)
             guard let self, !Task.isCancelled, self.shouldStayConnected else { return }
             self.startConnection()
         }

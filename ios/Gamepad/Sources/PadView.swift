@@ -65,8 +65,10 @@ struct PadView: View {
                 settings: $settings,
                 onResetLayout: {
                     PadLayout.resetSaved()
-                    layout = .standard
-                    surface?.layout = .standard
+                    let resetLayout = PadLayout.layout(for: settings.preset)
+                    layout = resetLayout
+                    resetLayout.save()
+                    surface?.layout = resetLayout
                 },
                 onEditLayout: {
                     showSettings = false
@@ -142,7 +144,6 @@ struct PadView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(Capsule().fill(Color.black.opacity(0.75)))
     }
 
     private var editBar: some View {
@@ -186,6 +187,7 @@ struct PadView: View {
         switch connection.status {
         case .connected: return .green
         case .connecting: return .orange
+        case .reconnecting: return .orange
         case .failed: return .red
         case .disconnected: return .gray
         }
@@ -196,6 +198,7 @@ struct PadView: View {
         switch connection.status {
         case .connected: return "Connecté"
         case .connecting: return "Connexion…"
+        case .reconnecting(let attempt): return "Reconnexion… (\(attempt))"
         case .failed(let message): return message
         case .disconnected: return "Déconnecté"
         }

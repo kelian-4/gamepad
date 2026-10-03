@@ -14,13 +14,22 @@ private struct Root: View {
 
     var body: some View {
         Group {
-            if connection.status == .connected {
-                PadView(connection: connection)
+            if showPad {
+                EdgeGestureDeferringHost {
+                    PadView(connection: connection)
+                }
             } else {
                 ConnectView(connection: connection)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: connection.status)
+    }
+
+    private var showPad: Bool {
+        switch connection.status {
+        case .connected, .reconnecting: return true
+        case .connecting, .failed, .disconnected: return false
+        }
     }
 }
 

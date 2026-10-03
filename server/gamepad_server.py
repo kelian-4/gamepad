@@ -45,6 +45,8 @@ TRIGGER_AXES = {
 
 DPAD_AXES = (e.ABS_HAT0X, e.ABS_HAT0Y)
 
+DEADMAN_TIMEOUT = 0.4
+
 CAPABILITIES = {
     e.EV_KEY: list(BUTTON_MAP.values()),
     e.EV_ABS: [
@@ -71,10 +73,19 @@ def to_trigger_value(f: float) -> int:
     f = clamp(f, 0.0, 1.0)
     return int(f * 255)
 
+XBOX360_VENDOR = 0x045e
+XBOX360_PRODUCT = 0x028e
+
 class VirtualGamepad:
     def __init__(self):
-        self.ui = UInput(CAPABILITIES, name="iPhone Virtual Gamepad", version=0x1)
-        log.info("Manette virtuelle créée : %s", self.ui.device.path)
+        self.ui = UInput(
+            CAPABILITIES,
+            name="Microsoft X-Box 360 pad",
+            vendor=XBOX360_VENDOR,
+            product=XBOX360_PRODUCT,
+            version=0x110,
+        )
+        log.info("Manette virtuelle créée (Xbox 360 %04x:%04x) : %s", XBOX360_VENDOR, XBOX360_PRODUCT, self.ui.device.path)
 
     def handle_message(self, msg: dict):
         mtype = msg.get("type")
@@ -121,6 +132,18 @@ class VirtualGamepad:
         else:
             log.warning("Message inconnu: %s", msg)
 
+    def neutralize(self):
+        for code in BUTTON_MAP.values():
+            self.ui.write(e.EV_KEY, code, 0)
+        for pair in STICK_AXES.values():
+            for axis in pair:
+                self.ui.write(e.EV_ABS, axis, 0)
+        for axis in TRIGGER_AXES.values():
+            self.ui.write(e.EV_ABS, axis, 0)
+        self.ui.write(e.EV_ABS, e.ABS_HAT0X, 0)
+        self.ui.write(e.EV_ABS, e.ABS_HAT0Y, 0)
+        self.ui.syn()
+
     def close(self):
         self.ui.close()
 
@@ -132,10 +155,25 @@ def disable_nagle(websocket):
     except Exception as exc:
         log.warning("TCP_NODELAY non appliqué: %s", exc)
 
+async def deadman_watchdog(gamepad: VirtualGamepad, last_seen: dict, stop_event: asyncio.Event):
+    try:
+        while not stop_event.is_set():
+            await asyncio.sleep(DEADMAN_TIMEOUT / 2)
+            elapsed = asyncio.get_event_loop().time() - last_seen["t"]
+            if elapsed > DEADMAN_TIMEOUT and not last_seen.get("neutral", False):
+                log.warning("Deadman: aucun message depuis %.2fs, remise au neutre", elapsed)
+                gamepad.neutralize()
+                last_seen["neutral"] = True
+    except asyncio.CancelledError:
+        pass
+
 async def handler(websocket, gamepad: VirtualGamepad):
     disable_nagle(websocket)
     peer = websocket.remote_address
     log.info("iPhone connecté depuis %s", peer)
+    last_seen = {"t": asyncio.get_event_loop().time(), "neutral": False}
+    stop_event = asyncio.Event()
+    watchdog_task = asyncio.create_task(deadman_watchdog(gamepad, last_seen, stop_event))
     try:
         async for raw in websocket:
             try:
@@ -143,6 +181,8 @@ async def handler(websocket, gamepad: VirtualGamepad):
             except json.JSONDecodeError:
                 log.warning("JSON invalide: %r", raw)
                 continue
+            last_seen["t"] = asyncio.get_event_loop().time()
+            last_seen["neutral"] = False
             if msg.get("type") == "ping":
                 await websocket.send(raw)
                 continue
@@ -150,6 +190,9 @@ async def handler(websocket, gamepad: VirtualGamepad):
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
+        stop_event.set()
+        watchdog_task.cancel()
+        gamepad.neutralize()
         log.info("iPhone déconnecté (%s)", peer)
 
 async def process_request(connection, request):
