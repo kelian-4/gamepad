@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
 
+import argparse
 import asyncio
 import json
 import logging
 import os
+import secrets
 import socket
+import sys
 
 import websockets
 from websockets.http11 import Response
 from websockets.datastructures import Headers
 from evdev import UInput, ecodes as e, AbsInfo
 
+try:
+    from zeroconf import ServiceInfo, Zeroconf
+    ZEROCONF_AVAILABLE = True
+except ImportError:
+    ZEROCONF_AVAILABLE = False
+
 HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gamepad_controller.html")
+TOKEN_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".pairing_token")
+MDNS_SERVICE_TYPE = "_gamepad._tcp.local."
+PROTOCOL_VERSION = 1
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("gamepad")
@@ -73,14 +85,32 @@ def to_trigger_value(f: float) -> int:
     f = clamp(f, 0.0, 1.0)
     return int(f * 255)
 
+def load_or_create_token() -> str:
+    try:
+        with open(TOKEN_PATH, "r") as f:
+            token = f.read().strip()
+            if token:
+                return token
+    except FileNotFoundError:
+        pass
+    token = secrets.token_hex(16)
+    try:
+        with open(TOKEN_PATH, "w") as f:
+            f.write(token)
+        os.chmod(TOKEN_PATH, 0o600)
+    except OSError as exc:
+        log.warning("Impossible d'enregistrer le token (%s), il changera au prochain démarrage", exc)
+    return token
+
 XBOX360_VENDOR = 0x045e
 XBOX360_PRODUCT = 0x028e
 
 class VirtualGamepad:
-    def __init__(self):
+    def __init__(self, index: int = 0):
+        suffix = f" #{index + 1}" if index > 0 else ""
         self.ui = UInput(
             CAPABILITIES,
-            name="Microsoft X-Box 360 pad",
+            name=f"Microsoft X-Box 360 pad{suffix}",
             vendor=XBOX360_VENDOR,
             product=XBOX360_PRODUCT,
             version=0x110,
@@ -147,6 +177,26 @@ class VirtualGamepad:
     def close(self):
         self.ui.close()
 
+class GamepadPool:
+    """Attribue une manette virtuelle par connexion cliente (multi-manettes)."""
+
+    def __init__(self, max_pads: int = 4):
+        self.max_pads = max_pads
+        self._free_slots = list(range(max_pads))
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> "tuple[int, VirtualGamepad] | None":
+        async with self._lock:
+            if not self._free_slots:
+                return None
+            slot = self._free_slots.pop(0)
+            return slot, VirtualGamepad(index=slot)
+
+    async def release(self, slot: int):
+        async with self._lock:
+            self._free_slots.append(slot)
+            self._free_slots.sort()
+
 def disable_nagle(websocket):
     try:
         sock = websocket.transport.get_extra_info("socket")
@@ -167,12 +217,45 @@ async def deadman_watchdog(gamepad: VirtualGamepad, last_seen: dict, stop_event:
     except asyncio.CancelledError:
         pass
 
-async def handler(websocket, gamepad: VirtualGamepad):
+async def handler(websocket, pool: GamepadPool, token: str):
     disable_nagle(websocket)
     peer = websocket.remote_address
-    log.info("iPhone connecté depuis %s", peer)
-    last_seen = {"t": asyncio.get_event_loop().time(), "neutral": False}
+    log.info("iPhone connecté depuis %s, en attente du handshake", peer)
+
+    slot_and_pad = None
+    watchdog_task = None
     stop_event = asyncio.Event()
+    try:
+        raw = await asyncio.wait_for(websocket.recv(), timeout=5.0)
+        hello = json.loads(raw)
+        if hello.get("type") != "hello":
+            await websocket.send(json.dumps({"type": "hello_ack", "ok": False, "reason": "handshake attendu"}))
+            return
+        if hello.get("token") != token:
+            log.warning("Token invalide depuis %s", peer)
+            await websocket.send(json.dumps({"type": "hello_ack", "ok": False, "reason": "token invalide"}))
+            return
+
+        slot_and_pad = await pool.acquire()
+        if slot_and_pad is None:
+            await websocket.send(json.dumps({"type": "hello_ack", "ok": False, "reason": "nombre maximum de manettes atteint"}))
+            return
+        slot, gamepad = slot_and_pad
+
+        await websocket.send(json.dumps({
+            "type": "hello_ack",
+            "ok": True,
+            "protocolVersion": PROTOCOL_VERSION,
+            "slot": slot,
+            "features": ["deadman", "xbox360_id", "trigger_analog", "thumb_click"],
+        }))
+        log.info("iPhone %s apparié, manette virtuelle #%d", peer, slot + 1)
+
+    except (asyncio.TimeoutError, json.JSONDecodeError, websockets.exceptions.ConnectionClosed):
+        log.warning("Handshake échoué depuis %s", peer)
+        return
+
+    last_seen = {"t": asyncio.get_event_loop().time(), "neutral": False}
     watchdog_task = asyncio.create_task(deadman_watchdog(gamepad, last_seen, stop_event))
     try:
         async for raw in websocket:
@@ -191,9 +274,12 @@ async def handler(websocket, gamepad: VirtualGamepad):
         pass
     finally:
         stop_event.set()
-        watchdog_task.cancel()
+        if watchdog_task:
+            watchdog_task.cancel()
         gamepad.neutralize()
-        log.info("iPhone déconnecté (%s)", peer)
+        gamepad.close()
+        await pool.release(slot)
+        log.info("iPhone déconnecté (%s), manette #%d libérée", peer, slot + 1)
 
 async def process_request(connection, request):
     if request.headers.get("Upgrade", "").lower() == "websocket":
@@ -209,23 +295,116 @@ async def process_request(connection, request):
 
     return Response(404, "Not Found", Headers(), b"Not Found")
 
-async def main(host="0.0.0.0", port=8765):
-    gamepad = VirtualGamepad()
+def local_ip() -> str:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+def start_mdns(port: int) -> "Zeroconf | None":
+    if not ZEROCONF_AVAILABLE:
+        log.warning("zeroconf non installé, découverte auto désactivée (pip install zeroconf)")
+        return None
+    try:
+        zc = Zeroconf()
+        ip = local_ip()
+        info = ServiceInfo(
+            MDNS_SERVICE_TYPE,
+            f"{socket.gethostname()}.{MDNS_SERVICE_TYPE}",
+            addresses=[socket.inet_aton(ip)],
+            port=port,
+            properties={"proto": str(PROTOCOL_VERSION)},
+        )
+        zc.register_service(info)
+        log.info("Annonce mDNS active (%s)", MDNS_SERVICE_TYPE)
+        return zc
+    except Exception as exc:
+        log.warning("mDNS indisponible: %s", exc)
+        return None
+
+def run_doctor() -> int:
+    ok = True
+    print("== gamepad doctor ==")
+
+    if os.path.exists("/dev/uinput"):
+        print("[OK] /dev/uinput existe")
+        if os.access("/dev/uinput", os.R_OK | os.W_OK):
+            print("[OK] /dev/uinput accessible en lecture/écriture")
+        else:
+            print("[FAIL] /dev/uinput non accessible (ajoute ton utilisateur au groupe uinput, ou vérifie udev)")
+            ok = False
+    else:
+        print("[FAIL] /dev/uinput absent (module uinput non chargé, ou hardware.uinput.enable sur NixOS)")
+        ok = False
+
+    try:
+        test_ui = UInput({e.EV_KEY: [e.BTN_SOUTH]}, name="gamepad-doctor-test")
+        test_ui.close()
+        print("[OK] création d'un device uinput de test réussie")
+    except Exception as exc:
+        print(f"[FAIL] impossible de créer un device uinput de test: {exc}")
+        ok = False
+
+    if ZEROCONF_AVAILABLE:
+        print("[OK] zeroconf installé (découverte mDNS disponible)")
+    else:
+        print("[WARN] zeroconf non installé (pip install zeroconf) — découverte mDNS désactivée")
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1)
+        result = s.connect_ex(("127.0.0.1", 8765))
+        s.close()
+        if result == 0:
+            print("[INFO] un serveur écoute déjà sur le port 8765")
+        else:
+            print("[OK] port 8765 libre")
+    except OSError as exc:
+        print(f"[WARN] impossible de tester le port 8765: {exc}")
+
+    ip = local_ip()
+    print(f"[INFO] adresse IP locale détectée : {ip}")
+    print(f"[INFO] token d'appairage : {TOKEN_PATH} ({'existe' if os.path.exists(TOKEN_PATH) else 'sera généré au démarrage'})")
+
+    print("== résultat:", "OK" if ok else "PROBLÈMES DÉTECTÉS", "==")
+    return 0 if ok else 1
+
+async def main(host="0.0.0.0", port=8765, max_pads=4):
+    token = load_or_create_token()
+    pool = GamepadPool(max_pads=max_pads)
+    zc = start_mdns(port)
     try:
         async with websockets.serve(
-            lambda ws: handler(ws, gamepad),
+            lambda ws: handler(ws, pool, token),
             host,
             port,
             process_request=process_request,
         ):
-            log.info("Serveur sur http://%s:%d (page web + WebSocket sur le même port)", host, port)
-            log.info("Un seul tunnel ngrok à faire pointer vers ce port.")
+            ip = local_ip()
+            log.info("Serveur sur http://%s:%d (page web + WebSocket sur le même port)", ip, port)
+            log.info("Token d'appairage : %s (voir %s)", token, TOKEN_PATH)
+            log.info("Jusqu'à %d manette(s) virtuelle(s) simultanée(s).", max_pads)
             await asyncio.Future()
     finally:
-        gamepad.close()
+        if zc is not None:
+            zc.close()
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Serveur de manette virtuelle")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--max-pads", type=int, default=4)
+    parser.add_argument("doctor_cmd", nargs="?", default=None, help="passer 'doctor' pour diagnostiquer l'environnement")
+    args = parser.parse_args()
+
+    if args.doctor_cmd == "doctor":
+        sys.exit(run_doctor())
+
     try:
-        asyncio.run(main())
+        asyncio.run(main(host=args.host, port=args.port, max_pads=args.max_pads))
     except KeyboardInterrupt:
         log.info("Arrêt du serveur.")

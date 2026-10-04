@@ -3,15 +3,23 @@ import PhotosUI
 
 struct SettingsView: View {
     @Binding var settings: PadSettings
+    let currentLayout: PadLayout
     let onResetLayout: () -> Void
     let onEditLayout: () -> Void
     let onClose: () -> Void
     let onBackgroundImageChanged: () -> Void
+    let onImportLayout: (PadLayout) -> Void
 
     @State private var photoItem: PhotosPickerItem?
     @State private var hasCustomImage = CustomBackgroundStorage.exists
     @State private var pendingBackground: PadBackground?
     @State private var pendingImage: UIImage?
+    @State private var confirmDeleteImage = false
+    @State private var confirmResetLayout = false
+    @State private var showExportSheet = false
+    @State private var showImportPicker = false
+    @State private var exportURL: URL?
+    @State private var importError: String?
 
     var body: some View {
         NavigationStack {
@@ -76,17 +84,18 @@ struct SettingsView: View {
 
                     if hasCustomImage {
                         Button("Supprimer la photo de fond", role: .destructive) {
-                            CustomBackgroundStorage.clear()
-                            hasCustomImage = false
-                            if settings.background == .custom { settings.background = .black }
-                            onBackgroundImageChanged()
+                            confirmDeleteImage = true
                         }
                     }
                 }
 
                 Section("Disposition") {
                     Button("Modifier la disposition") { onEditLayout() }
-                    Button("Réinitialiser la disposition", role: .destructive) { onResetLayout() }
+                    Button("Exporter la disposition") { exportLayout() }
+                    Button("Importer une disposition") { showImportPicker = true }
+                    Button("Réinitialiser la disposition", role: .destructive) {
+                        confirmResetLayout = true
+                    }
                 }
             }
             .navigationTitle("Réglages")
@@ -140,9 +149,89 @@ struct SettingsView: View {
         } message: {
             Text("Cette photo remplacera le fond actuel.")
         }
+        .alert(
+            "Supprimer la photo de fond ?",
+            isPresented: $confirmDeleteImage
+        ) {
+            Button("Supprimer", role: .destructive) {
+                CustomBackgroundStorage.clear()
+                hasCustomImage = false
+                if settings.background == .custom { settings.background = .black }
+                onBackgroundImageChanged()
+            }
+            Button("Annuler", role: .cancel) {}
+        } message: {
+            Text("Cette action est définitive, la photo actuelle sera supprimée.")
+        }
+        .alert(
+            "Réinitialiser la disposition ?",
+            isPresented: $confirmResetLayout
+        ) {
+            Button("Réinitialiser", role: .destructive) {
+                onResetLayout()
+            }
+            Button("Annuler", role: .cancel) {}
+        } message: {
+            Text("Toutes les positions et tailles personnalisées seront perdues et remplacées par la disposition du preset actuel.")
+        }
+        .alert(
+            "Import impossible",
+            isPresented: Binding(
+                get: { importError != nil },
+                set: { if !$0 { importError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { importError = nil }
+        } message: {
+            Text(importError ?? "")
+        }
+        .sheet(isPresented: $showExportSheet) {
+            if let exportURL {
+                ShareSheet(items: [exportURL])
+            }
+        }
+        .sheet(isPresented: $showImportPicker) {
+            LayoutDocumentPicker { url in
+                importLayout(from: url)
+            }
+        }
+    }
+
+    private func exportLayout() {
+        guard let data = try? JSONEncoder().encode(currentLayout) else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("disposition-gamepad.json")
+        do {
+            try data.write(to: url, options: .atomic)
+            exportURL = url
+            showExportSheet = true
+        } catch {
+            importError = "Impossible d'exporter la disposition."
+        }
+    }
+
+    private func importLayout(from url: URL) {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else {
+            importError = "Impossible de lire le fichier sélectionné."
+            return
+        }
+        guard let imported = try? JSONDecoder().decode(PadLayout.self, from: data), imported.isPlausible else {
+            importError = "Ce fichier ne contient pas une disposition valide."
+            return
+        }
+        onImportLayout(imported)
     }
 }
 
 #Preview {
-    SettingsView(settings: .constant(.standard), onResetLayout: {}, onEditLayout: {}, onClose: {}, onBackgroundImageChanged: {})
+    SettingsView(
+        settings: .constant(.standard),
+        currentLayout: .standard,
+        onResetLayout: {},
+        onEditLayout: {},
+        onClose: {},
+        onBackgroundImageChanged: {},
+        onImportLayout: { _ in }
+    )
 }

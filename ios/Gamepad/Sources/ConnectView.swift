@@ -3,6 +3,7 @@ import SwiftUI
 struct ConnectView: View {
     @EnvironmentObject var state: GamepadState
     @ObservedObject var connection: GamepadConnection
+    @StateObject private var discovery = ServerDiscovery()
 
     var body: some View {
         VStack(spacing: 16) {
@@ -23,8 +24,40 @@ struct ConnectView: View {
                 TextField("Port", text: $state.serverPort)
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.numberPad)
+
+                TextField("Token d'appairage (affiché au lancement du serveur)", text: $state.pairingToken)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
             }
             .frame(maxWidth: 280)
+
+            Button {
+                discovery.start()
+            } label: {
+                Label(discovery.isSearching ? "Recherche…" : "Rechercher automatiquement", systemImage: "wifi")
+                    .font(.footnote)
+            }
+            .disabled(discovery.isSearching)
+
+            if !discovery.results.isEmpty {
+                VStack(spacing: 6) {
+                    ForEach(discovery.results) { found in
+                        Button {
+                            state.serverHost = found.host
+                            state.serverPort = String(found.port)
+                            discovery.stop()
+                        } label: {
+                            HStack {
+                                Image(systemName: "server.rack")
+                                Text("\(found.name) — \(found.host):\(found.port)")
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: 280)
+            }
 
             statusLabel
 
@@ -52,6 +85,9 @@ struct ConnectView: View {
             }
         }
         .padding()
+        .onDisappear {
+            discovery.stop()
+        }
     }
 
     @ViewBuilder

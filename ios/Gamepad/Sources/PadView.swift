@@ -16,8 +16,10 @@ struct PadView: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
-                backgroundView(in: geo.size)
-                    .ignoresSafeArea()
+                GeometryReader { bgGeo in
+                    backgroundView(in: bgGeo.size)
+                }
+                .ignoresSafeArea()
 
                 if let bridge {
                     PadSurface(layout: layout, settings: settings, editing: editing, delegate: bridge) { view in
@@ -63,6 +65,7 @@ struct PadView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(
                 settings: $settings,
+                currentLayout: layout,
                 onResetLayout: {
                     PadLayout.resetSaved()
                     let resetLayout = PadLayout.layout(for: settings.preset)
@@ -77,6 +80,11 @@ struct PadView: View {
                 onClose: { showSettings = false },
                 onBackgroundImageChanged: {
                     customBackgroundImage = CustomBackgroundStorage.load()
+                },
+                onImportLayout: { imported in
+                    layout = imported
+                    imported.save()
+                    surface?.layout = imported
                 }
             )
         }
@@ -232,6 +240,10 @@ final class PadBridge: PadSurfaceDelegate {
 
     func dpad(x: Int, y: Int) {
         connection.sendDpad(x: x, y: y)
+    }
+
+    func trigger(_ name: String, value: Double) {
+        connection.sendTrigger(name: name, value: value)
     }
 
     func layoutChanged(_ layout: PadLayout) {

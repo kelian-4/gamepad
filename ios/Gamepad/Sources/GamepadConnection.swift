@@ -19,11 +19,14 @@ final class GamepadConnection: ObservableObject {
     private let queue = DispatchQueue(label: "com.kelian.gamepad.ws")
     private var host: String = ""
     private var port: UInt16 = 8765
+    private var token: String = ""
     private var reconnectTask: Task<Void, Never>?
     private var shouldStayConnected = false
+    private var hasConnectedOnce = false
     private var reconnectAttempt = 0
     private static let maxReconnectDelay: UInt64 = 10_000_000_000
     private static let baseReconnectDelay: UInt64 = 500_000_000
+    private static let protocolVersion = 1
 
     private var pingTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
@@ -39,18 +42,21 @@ final class GamepadConnection: ObservableObject {
         if events.count > 12 { events.removeFirst(events.count - 12) }
     }
 
-    func connect(host: String, port: UInt16) {
+    func connect(host: String, port: UInt16, token: String) {
         events.removeAll()
         log("connexion à \(host):\(port)")
         self.host = host
         self.port = port
+        self.token = token
         shouldStayConnected = true
+        hasConnectedOnce = false
         reconnectAttempt = 0
         startConnection()
     }
 
     func disconnect() {
         shouldStayConnected = false
+        hasConnectedOnce = false
         reconnectAttempt = 0
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -100,12 +106,11 @@ final class GamepadConnection: ObservableObject {
                 guard let self, let conn, self.connection === conn else { return }
                 switch state {
                 case .ready:
-                    self.log("prêt")
+                    self.log("prêt, handshake…")
                     self.timeoutTask?.cancel()
                     self.timeoutTask = nil
-                    self.reconnectAttempt = 0
-                    self.status = .connected
-                    self.startPing()
+                    self.sendHello()
+                    self.armTimeout(for: conn)
                 case .failed(let error):
                     self.log("échec: \(error.localizedDescription)")
                     self.handleConnectionLoss(error.localizedDescription)
@@ -139,7 +144,7 @@ final class GamepadConnection: ObservableObject {
 
     private func handleConnectionLoss(_ message: String) {
         teardownCurrentConnection()
-        if shouldStayConnected {
+        if shouldStayConnected && hasConnectedOnce {
             reconnectAttempt += 1
             status = .reconnecting(attempt: reconnectAttempt)
             log("perte de connexion: \(message)")
@@ -150,7 +155,7 @@ final class GamepadConnection: ObservableObject {
     }
 
     private func scheduleReconnectIfNeeded() {
-        guard shouldStayConnected else { return }
+        guard shouldStayConnected, hasConnectedOnce else { return }
         reconnectTask?.cancel()
         let exponent = min(reconnectAttempt, 5)
         let scaled = Self.baseReconnectDelay * UInt64(1 << exponent)
@@ -189,13 +194,43 @@ final class GamepadConnection: ObservableObject {
         }
     }
 
+    private func sendHello() {
+        let escapedToken = token
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        sendRawUnconditionally("{\"type\":\"hello\",\"protocolVersion\":\(Self.protocolVersion),\"token\":\"\(escapedToken)\",\"platform\":\"ios\"}")
+    }
+
     private func handleIncoming(_ data: Data) {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              obj["type"] as? String == "ping",
-              let sent = (obj["t"] as? NSNumber)?.uint64Value else { return }
-        let now = DispatchTime.now().uptimeNanoseconds
-        guard now >= sent else { return }
-        latencyMs = Int((now - sent) / 1_000_000)
+              let type = obj["type"] as? String else { return }
+
+        switch type {
+        case "ping":
+            guard let sent = (obj["t"] as? NSNumber)?.uint64Value else { return }
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard now >= sent else { return }
+            latencyMs = Int((now - sent) / 1_000_000)
+
+        case "hello_ack":
+            let ok = (obj["ok"] as? Bool) ?? false
+            if ok {
+                log("appairage réussi")
+                timeoutTask?.cancel()
+                timeoutTask = nil
+                reconnectAttempt = 0
+                hasConnectedOnce = true
+                status = .connected
+                startPing()
+            } else {
+                let reason = (obj["reason"] as? String) ?? "appairage refusé"
+                log("appairage refusé: \(reason)")
+                handleConnectionLoss(reason)
+            }
+
+        default:
+            break
+        }
     }
 
     func sendButton(name: String, pressed: Bool) {
@@ -237,7 +272,12 @@ final class GamepadConnection: ObservableObject {
     }
 
     private func sendRaw(_ json: String) {
-        guard let conn = connection, status == .connected else { return }
+        guard status == .connected else { return }
+        sendRawUnconditionally(json)
+    }
+
+    private func sendRawUnconditionally(_ json: String) {
+        guard let conn = connection else { return }
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "gamepadMessage", metadata: [metadata])
         conn.send(content: Data(json.utf8), contentContext: context, isComplete: true, completion: .idempotent)

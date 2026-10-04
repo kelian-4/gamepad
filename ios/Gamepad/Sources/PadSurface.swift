@@ -1,11 +1,16 @@
 import SwiftUI
 import UIKit
 
+private extension CGPoint {
+    var length: CGFloat { hypot(x, y) }
+}
+
 @MainActor
 protocol PadSurfaceDelegate: AnyObject {
     func button(_ name: String, pressed: Bool)
     func stick(_ name: String, x: Double, y: Double)
     func dpad(x: Int, y: Int)
+    func trigger(_ name: String, value: Double)
     func layoutChanged(_ layout: PadLayout)
     func openSettings()
     func selectionChanged(_ id: String?)
@@ -37,6 +42,10 @@ final class PadSurfaceView: UIView {
     private var pendingRelease: [String: DispatchWorkItem] = [:]
     private var stickOffsets: [String: CGPoint] = [:]
     private var dpadState: (Int, Int) = (0, 0)
+    private var triggerValues: [String: Double] = [:]
+    private var thumbTapCount: [String: Int] = [:]
+    private var thumbTapResetWork: [String: DispatchWorkItem] = [:]
+    private static let thumbDoubleTapWindow: TimeInterval = 0.35
     private var selectedID: String? {
         didSet {
             if oldValue != selectedID { delegate?.selectionChanged(selectedID) }
@@ -45,18 +54,30 @@ final class PadSurfaceView: UIView {
     private var dragOrigin: [ObjectIdentifier: (cx: Double, cy: Double, point: CGPoint)] = [:]
     private var pinch: UIPinchGestureRecognizer?
     private var pinchStartScale = 1.0
-    private let impact = UIImpactFeedbackGenerator(style: .rigid)
+    private let lightImpact = UIImpactFeedbackGenerator(style: .light)
+    private let sharpImpact = UIImpactFeedbackGenerator(style: .rigid)
 
     private func hapticTap() {
         guard settings.hapticsEnabled else { return }
-        impact.impactOccurred()
+        lightImpact.impactOccurred()
+    }
+
+    private func hapticSharp() {
+        guard settings.hapticsEnabled else { return }
+        sharpImpact.impactOccurred(intensity: 0.9)
+    }
+
+    private func hapticStickEdge() {
+        guard settings.hapticsEnabled else { return }
+        sharpImpact.impactOccurred(intensity: 0.4)
     }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isMultipleTouchEnabled = true
         backgroundColor = .clear
-        impact.prepare()
+        lightImpact.prepare()
+        sharpImpact.prepare()
         let recognizer = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         recognizer.cancelsTouchesInView = false
         recognizer.delaysTouchesBegan = false
@@ -77,7 +98,7 @@ final class PadSurfaceView: UIView {
             case .round, .stick, .dpad:
                 let c = CGPoint(x: f.midX, y: f.midY)
                 return hypot(point.x - c.x, point.y - c.y) <= f.width / 2 + 8
-            case .pill:
+            case .pill, .trigger:
                 return f.insetBy(dx: -8, dy: -8).contains(point)
             }
         }
@@ -130,7 +151,7 @@ final class PadSurfaceView: UIView {
                         touchTargets.removeValue(forKey: key)
                         release(el.id)
                     }
-                case .stick, .dpad:
+                case .stick, .dpad, .trigger:
                     track(el, at: point)
                 }
             }
@@ -179,8 +200,31 @@ final class PadSurfaceView: UIView {
         switch el.kind {
         case .round, .pill:
             press(el.id)
-        case .stick, .dpad:
+        case .stick:
+            registerStickTap(el.id)
             track(el, at: point)
+        case .dpad, .trigger:
+            track(el, at: point)
+        }
+    }
+
+    private func registerStickTap(_ stickID: String) {
+        let thumbID = stickID == "left" ? "thumbl" : "thumbr"
+        let count = (thumbTapCount[thumbID] ?? 0) + 1
+        thumbTapCount[thumbID] = count
+        thumbTapResetWork[thumbID]?.cancel()
+
+        if count >= 2 {
+            thumbTapCount[thumbID] = 0
+            hapticSharp()
+            press(thumbID)
+            release(thumbID)
+        } else {
+            let work = DispatchWorkItem { [weak self] in
+                self?.thumbTapCount[thumbID] = 0
+            }
+            thumbTapResetWork[thumbID] = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.thumbDoubleTapWindow, execute: work)
         }
     }
 
@@ -195,9 +239,11 @@ final class PadSurfaceView: UIView {
             var dx = point.x - c.x
             var dy = point.y - c.y
             let d = hypot(dx, dy)
+            let wasAtEdge = (stickOffsets[el.id]?.length ?? 0) >= radius - 0.5
             if d > radius {
                 dx = dx / d * radius
                 dy = dy / d * radius
+                if !wasAtEdge { hapticStickEdge() }
             }
             stickOffsets[el.id] = CGPoint(x: dx, y: dy)
             delegate?.stick(el.id, x: Double(dx / radius), y: Double(dy / radius))
@@ -215,6 +261,14 @@ final class PadSurfaceView: UIView {
                 dpadState = (x, y)
                 delegate?.dpad(x: x, y: y)
             }
+        case .trigger:
+            let travel = max(f.height - 24, 1)
+            let raw = (f.maxY - point.y) / travel
+            let value = min(max(Double(raw), 0), 1)
+            let previous = triggerValues[el.id] ?? 0
+            triggerValues[el.id] = value
+            if previous < 0.98 && value >= 0.98 { hapticSharp() }
+            delegate?.trigger(el.id, value: value)
         default:
             break
         }
@@ -230,6 +284,9 @@ final class PadSurfaceView: UIView {
         case .dpad:
             dpadState = (0, 0)
             delegate?.dpad(x: 0, y: 0)
+        case .trigger:
+            triggerValues[el.id] = 0
+            delegate?.trigger(el.id, value: 0)
         }
     }
 
@@ -280,6 +337,10 @@ final class PadSurfaceView: UIView {
         if dpadState != (0, 0) {
             dpadState = (0, 0)
             delegate?.dpad(x: 0, y: 0)
+        }
+        for id in Array(triggerValues.keys) where triggerValues[id] != 0 {
+            triggerValues[id] = 0
+            delegate?.trigger(id, value: 0)
         }
         touchTargets.removeAll()
     }
@@ -408,6 +469,25 @@ final class PadSurfaceView: UIView {
                               color: active ? accent : UIColor.white.withAlphaComponent(0.55 * dim),
                               size: 18 * CGFloat(el.scale))
                 }
+
+            case .trigger:
+                let track = UIBezierPath(roundedRect: f, cornerRadius: f.width / 2.4)
+                base.withAlphaComponent(0.08 * dim).setFill()
+                track.fill()
+                stroke.withAlphaComponent(0.18 * dim + (selected ? 0.5 : 0)).setStroke()
+                track.lineWidth = selected ? 2.5 : 1.5
+                track.stroke()
+                let value = CGFloat(triggerValues[el.id] ?? 0)
+                if value > 0.01 {
+                    let fillHeight = max(f.height * value, 6)
+                    let fillRect = CGRect(x: f.minX, y: f.maxY - fillHeight, width: f.width, height: fillHeight)
+                    let fillPath = UIBezierPath(roundedRect: fillRect, cornerRadius: f.width / 2.4)
+                    accent.withAlphaComponent(0.85 * dim).setFill()
+                    fillPath.fill()
+                }
+                drawLabel(el.label, in: CGRect(x: f.minX, y: f.minY - 2, width: f.width, height: 18),
+                          color: UIColor.white.withAlphaComponent(0.7 * dim),
+                          size: 12 * CGFloat(el.scale))
             }
         }
     }

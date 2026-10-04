@@ -44,5 +44,9 @@
     </dict>
     <key>NSLocalNetworkUsageDescription</key>
     <string>L'app a besoin d'accéder au réseau local pour se connecter au serveur de la manette virtuelle.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_gamepad._tcp</string>
+    </array>
 </dict>
 </plist>
