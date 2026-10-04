@@ -12,12 +12,14 @@ final class ServerDiscovery: ObservableObject {
 
     @Published private(set) var isSearching = false
     @Published private(set) var results: [Found] = []
+    @Published private(set) var searchedWithNoResult = false
 
     private var browser: NWBrowser?
 
     func start() {
         stop()
         results = []
+        searchedWithNoResult = false
         isSearching = true
 
         let params = NWParameters()
@@ -41,7 +43,9 @@ final class ServerDiscovery: ObservableObject {
 
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 6_000_000_000)
-            self?.isSearching = false
+            guard let self else { return }
+            self.isSearching = false
+            self.searchedWithNoResult = self.results.isEmpty
         }
     }
 

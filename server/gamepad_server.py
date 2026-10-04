@@ -312,15 +312,17 @@ def start_mdns(port: int) -> "Zeroconf | None":
     try:
         zc = Zeroconf()
         ip = local_ip()
+        hostname = socket.gethostname().split(".")[0]
         info = ServiceInfo(
             MDNS_SERVICE_TYPE,
-            f"{socket.gethostname()}.{MDNS_SERVICE_TYPE}",
+            f"{hostname}.{MDNS_SERVICE_TYPE}",
             addresses=[socket.inet_aton(ip)],
             port=port,
             properties={"proto": str(PROTOCOL_VERSION)},
+            server=f"{hostname}.local.",
         )
         zc.register_service(info)
-        log.info("Annonce mDNS active (%s)", MDNS_SERVICE_TYPE)
+        log.info("Annonce mDNS active (%s, hôte %s.local.)", MDNS_SERVICE_TYPE, hostname)
         return zc
     except Exception as exc:
         log.warning("mDNS indisponible: %s", exc)

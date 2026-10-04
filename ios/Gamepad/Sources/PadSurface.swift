@@ -139,7 +139,7 @@ final class PadSurfaceView: UIView {
             } else {
                 let el = layout.elements[idx]
                 switch el.kind {
-                case .round, .pill:
+                case .round, .pill, .trigger:
                     var scaled = el
                     scaled.scale *= settings.globalScale
                     let f = scaled.frame(in: bounds.size)
@@ -151,7 +151,7 @@ final class PadSurfaceView: UIView {
                         touchTargets.removeValue(forKey: key)
                         release(el.id)
                     }
-                case .stick, .dpad, .trigger:
+                case .stick, .dpad:
                     track(el, at: point)
                 }
             }
@@ -198,12 +198,12 @@ final class PadSurfaceView: UIView {
             return
         }
         switch el.kind {
-        case .round, .pill:
+        case .round, .pill, .trigger:
             press(el.id)
         case .stick:
             registerStickTap(el.id)
             track(el, at: point)
-        case .dpad, .trigger:
+        case .dpad:
             track(el, at: point)
         }
     }
@@ -261,14 +261,6 @@ final class PadSurfaceView: UIView {
                 dpadState = (x, y)
                 delegate?.dpad(x: x, y: y)
             }
-        case .trigger:
-            let travel = max(f.height - 24, 1)
-            let raw = (f.maxY - point.y) / travel
-            let value = min(max(Double(raw), 0), 1)
-            let previous = triggerValues[el.id] ?? 0
-            triggerValues[el.id] = value
-            if previous < 0.98 && value >= 0.98 { hapticSharp() }
-            delegate?.trigger(el.id, value: value)
         default:
             break
         }
@@ -290,13 +282,23 @@ final class PadSurfaceView: UIView {
         }
     }
 
+    private func isTrigger(_ id: String) -> Bool {
+        layout.elements.first(where: { $0.id == id })?.kind == .trigger
+    }
+
     private func press(_ id: String) {
         pendingRelease[id]?.cancel()
         pendingRelease[id] = nil
         if pressedSince[id] == nil {
             pressedSince[id] = CACurrentMediaTime()
-            hapticTap()
-            delegate?.button(id, pressed: true)
+            if isTrigger(id) {
+                hapticSharp()
+                triggerValues[id] = 1
+                delegate?.trigger(id, value: 1)
+            } else {
+                hapticTap()
+                delegate?.button(id, pressed: true)
+            }
         }
     }
 
@@ -319,7 +321,12 @@ final class PadSurfaceView: UIView {
         pendingRelease[id] = nil
         guard pressedSince[id] != nil else { return }
         pressedSince[id] = nil
-        delegate?.button(id, pressed: false)
+        if isTrigger(id) {
+            triggerValues[id] = 0
+            delegate?.trigger(id, value: 0)
+        } else {
+            delegate?.button(id, pressed: false)
+        }
         setNeedsDisplay()
     }
 
@@ -328,7 +335,12 @@ final class PadSurfaceView: UIView {
             pendingRelease[id]?.cancel()
             pendingRelease[id] = nil
             pressedSince[id] = nil
-            delegate?.button(id, pressed: false)
+            if isTrigger(id) {
+                triggerValues[id] = 0
+                delegate?.trigger(id, value: 0)
+            } else {
+                delegate?.button(id, pressed: false)
+            }
         }
         for id in Array(stickOffsets.keys) {
             stickOffsets[id] = .zero
@@ -471,23 +483,16 @@ final class PadSurfaceView: UIView {
                 }
 
             case .trigger:
-                let track = UIBezierPath(roundedRect: f, cornerRadius: f.width / 2.4)
-                base.withAlphaComponent(0.08 * dim).setFill()
-                track.fill()
+                let pressed = pressedSince[el.id] != nil
+                let path = UIBezierPath(roundedRect: f, cornerRadius: f.width / 2.4)
+                (pressed ? accent : base.withAlphaComponent(0.08 * dim)).setFill()
+                path.fill()
                 stroke.withAlphaComponent(0.18 * dim + (selected ? 0.5 : 0)).setStroke()
-                track.lineWidth = selected ? 2.5 : 1.5
-                track.stroke()
-                let value = CGFloat(triggerValues[el.id] ?? 0)
-                if value > 0.01 {
-                    let fillHeight = max(f.height * value, 6)
-                    let fillRect = CGRect(x: f.minX, y: f.maxY - fillHeight, width: f.width, height: fillHeight)
-                    let fillPath = UIBezierPath(roundedRect: fillRect, cornerRadius: f.width / 2.4)
-                    accent.withAlphaComponent(0.85 * dim).setFill()
-                    fillPath.fill()
-                }
-                drawLabel(el.label, in: CGRect(x: f.minX, y: f.minY - 2, width: f.width, height: 18),
-                          color: UIColor.white.withAlphaComponent(0.7 * dim),
-                          size: 12 * CGFloat(el.scale))
+                path.lineWidth = selected ? 2.5 : 1.5
+                path.stroke()
+                drawLabel(el.label, in: f,
+                          color: pressed ? .black : UIColor.white.withAlphaComponent(0.85 * dim),
+                          size: 14 * CGFloat(el.scale))
             }
         }
     }

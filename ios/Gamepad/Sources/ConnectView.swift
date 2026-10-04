@@ -57,6 +57,12 @@ struct ConnectView: View {
                     }
                 }
                 .frame(maxWidth: 280)
+            } else if discovery.searchedWithNoResult {
+                Text("Aucun serveur trouvé sur le réseau local. Vérifie que le serveur est lancé et que le téléphone est sur le même Wi-Fi.")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
             }
 
             statusLabel
@@ -72,17 +78,6 @@ struct ConnectView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(state.serverHost.isEmpty)
-
-            if !connection.events.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(connection.events.enumerated()), id: \.offset) { _, line in
-                        Text(line)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.5))
-                    }
-                }
-                .frame(maxWidth: 320, alignment: .leading)
-            }
         }
         .padding()
         .onDisappear {

@@ -16,10 +16,8 @@ struct PadView: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
-                GeometryReader { bgGeo in
-                    backgroundView(in: bgGeo.size)
-                }
-                .ignoresSafeArea()
+                backgroundView
+                    .ignoresSafeArea()
 
                 if let bridge {
                     PadSurface(layout: layout, settings: settings, editing: editing, delegate: bridge) { view in
@@ -123,14 +121,17 @@ struct PadView: View {
     }
 
     @ViewBuilder
-    private func backgroundView(in size: CGSize) -> some View {
+    private var backgroundView: some View {
         if settings.background == .custom, let customBackgroundImage {
-            Image(uiImage: customBackgroundImage)
-                .resizable()
-                .scaledToFill()
-                .frame(width: size.width, height: size.height)
-                .clipped()
-                .overlay(Color.black.opacity(0.35))
+            GeometryReader { geo in
+                Image(uiImage: customBackgroundImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+            }
+            .ignoresSafeArea()
+            .overlay(Color.black.opacity(0.35))
         } else {
             settings.background.color
         }

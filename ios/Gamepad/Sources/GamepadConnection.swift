@@ -84,7 +84,11 @@ final class GamepadConnection: ObservableObject {
         reconnectTask = nil
         teardownCurrentConnection()
 
-        status = .connecting
+        if hasConnectedOnce {
+            status = .reconnecting(attempt: reconnectAttempt)
+        } else {
+            status = .connecting
+        }
 
         let tcpOptions = NWProtocolTCP.Options()
         tcpOptions.noDelay = true
@@ -116,7 +120,7 @@ final class GamepadConnection: ObservableObject {
                     self.handleConnectionLoss(error.localizedDescription)
                 case .waiting(let error):
                     self.log("attente: \(error.localizedDescription)")
-                    self.status = .connecting
+                    self.status = self.hasConnectedOnce ? .reconnecting(attempt: self.reconnectAttempt) : .connecting
                 case .cancelled:
                     break
                 default:
@@ -137,7 +141,7 @@ final class GamepadConnection: ObservableObject {
             guard !Task.isCancelled, let self, let conn, self.connection === conn else { return }
             if self.status != .connected {
                 self.log("délai dépassé")
-                self.handleConnectionLoss("Délai dépassé. Vérifie Réglages > Confidentialité > Réseau local")
+                self.handleConnectionLoss("Délai dépassé. Vérifie que le serveur est bien lancé sur la machine, et Réglages > Confidentialité > Réseau local")
             }
         }
     }
