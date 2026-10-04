@@ -13,13 +13,17 @@ final class ServerDiscovery: ObservableObject {
     @Published private(set) var isSearching = false
     @Published private(set) var results: [Found] = []
     @Published private(set) var searchedWithNoResult = false
+    @Published private(set) var permissionSuspected = false
 
     private var browser: NWBrowser?
+    private var sawReadyState = false
 
     func start() {
         stop()
         results = []
         searchedWithNoResult = false
+        permissionSuspected = false
+        sawReadyState = false
         isSearching = true
 
         let params = NWParameters()
@@ -34,8 +38,13 @@ final class ServerDiscovery: ObservableObject {
         }
         browser.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
-                if case .failed = state {
+                switch state {
+                case .ready:
+                    self?.sawReadyState = true
+                case .failed:
                     self?.isSearching = false
+                default:
+                    break
                 }
             }
         }
@@ -46,6 +55,7 @@ final class ServerDiscovery: ObservableObject {
             guard let self else { return }
             self.isSearching = false
             self.searchedWithNoResult = self.results.isEmpty
+            self.permissionSuspected = self.results.isEmpty && !self.sawReadyState
         }
     }
 

@@ -16,6 +16,9 @@ struct EdgeGestureDeferringHost<Content: View>: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> EdgeGestureDeferringViewController {
         let host = EdgeGestureDeferringViewController()
         let child = UIHostingController(rootView: content)
+        if #available(iOS 16.4, *) {
+            child.safeAreaRegions = []
+        }
         child.view.backgroundColor = .clear
         host.addChild(child)
         host.view.addSubview(child.view)

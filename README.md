@@ -18,8 +18,7 @@ Pour installer sur un iPhone : télécharger le `.ipa` depuis les artifacts du r
 ## Utilisation
 
 1. Sur la machine Linux (NixOS) : `python3 server/gamepad_server.py` (dépendances : voir `server/requirements.txt`, ou le module NixOS dans `nixos/`)
-2. Le serveur affiche un token d'appairage au démarrage (généré une fois, stocké dans `server/.pairing_token`).
-3. Sur le téléphone : ouvrir l'app, soit toucher « Rechercher automatiquement » (découverte mDNS sur le réseau local), soit entrer l'IP + le port (8765 par défaut) à la main, puis coller le token affiché par le serveur, et se connecter.
+2. Sur le téléphone : ouvrir l'app, soit toucher « Rechercher automatiquement » (découverte mDNS sur le réseau local), soit entrer l'IP + le port (8765 par défaut) à la main, puis se connecter.
 
 Diagnostic de l'environnement serveur : `python3 server/gamepad_server.py doctor`.
 
@@ -36,13 +35,12 @@ sudo chrt -r 10 python3 server/gamepad_server.py
 ### Robustesse
 
 - **Deadman côté serveur** : si aucun message n'arrive pendant 400 ms (Wi-Fi coupé, app en arrière-plan, téléphone verrouillé), le serveur remet tous les boutons/axes au neutre pour éviter un stick ou un bouton bloqué.
-- **Reconnexion côté app** : backoff exponentiel (0.5s à 10s max) après une perte de connexion établie, avec un indicateur discret "Reconnexion… (n)" à l'écran plutôt qu'un retour à l'écran de connexion. Un échec de première connexion (mauvaise IP/port/token) n'affiche jamais l'interface de la manette et ne boucle pas indéfiniment.
+- **Reconnexion côté app** : backoff exponentiel (0.5s à 10s max) après une perte de connexion établie, avec un indicateur discret "Reconnexion… (n)" à l'écran plutôt qu'un retour à l'écran de connexion. Un échec de première connexion (mauvaise IP/port, serveur éteint) n'affiche jamais l'interface de la manette et ne boucle pas indéfiniment.
 - **Identité Xbox 360 émulée** : la manette virtuelle s'annonce avec le VID/PID `045e:028e` (Xbox 360), reconnue nativement par Steam/Proton/SDL.
 - **Cycle de vie iOS** : écran toujours allumé pendant l'utilisation (`isIdleTimerDisabled`), gestes système (Centre de contrôle, Dock) différés sur les bords de l'écran pour éviter de les déclencher accidentellement en jeu.
-- **Token d'appairage** : le serveur génère un token au premier démarrage (`server/.pairing_token`) ; le client doit le fournir lors du handshake, sinon la connexion est refusée.
 - **Handshake versionné** : le client annonce sa version de protocole et sa plateforme à la connexion ; le serveur répond avec les fonctionnalités supportées.
 - **Multi-manettes** : jusqu'à 4 manettes virtuelles simultanées (une par appareil connecté), chacune avec son propre device `uinput`.
-- **Diagnostic (`doctor`)** : `python3 server/gamepad_server.py doctor` vérifie `/dev/uinput`, les permissions, la disponibilité de `zeroconf`, et affiche l'IP locale et le chemin du token.
+- **Diagnostic (`doctor`)** : `python3 server/gamepad_server.py doctor` vérifie `/dev/uinput`, les permissions, la disponibilité de `zeroconf`, et affiche l'IP locale.
 
 ### Qualité de vie
 
@@ -52,6 +50,6 @@ sudo chrt -r 10 python3 server/gamepad_server.py
 
 ### Gameplay
 
-- **LT/RT analogiques** : gâchettes glissantes (haut = appuyé à fond, bas = relâché) en plus de LB/RB.
+- **LT/RT** : gâchettes supplémentaires (simple appui, comme LB/RB).
 - **L3/R3 (clic de stick)** : double-tap rapide sur un stick pour déclencher le clic du stick correspondant.
 - **Haptique différenciée** : tap léger sur les boutons normaux, clic plus sec sur les gâchettes analogiques et les clics de stick, cran discret quand un stick atteint le bord de sa course.

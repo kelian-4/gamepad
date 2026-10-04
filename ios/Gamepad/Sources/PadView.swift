@@ -27,14 +27,14 @@ struct PadView: View {
                 }
 
                 statusBar
-                    .padding(.top, geo.safeAreaInsets.top + 6)
+                    .padding(.top, max(geo.safeAreaInsets.top, 8) + 6)
                     .padding(.leading, max(geo.safeAreaInsets.leading, 16) + 8)
 
                 if editing {
                     editBar
-                        .padding(.top, geo.safeAreaInsets.top + 6)
+                        .padding(.bottom, max(geo.safeAreaInsets.bottom, 8) + 6)
                         .padding(.trailing, max(geo.safeAreaInsets.trailing, 16) + 8)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
             }
         }

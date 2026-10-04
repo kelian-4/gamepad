@@ -19,7 +19,6 @@ final class GamepadConnection: ObservableObject {
     private let queue = DispatchQueue(label: "com.kelian.gamepad.ws")
     private var host: String = ""
     private var port: UInt16 = 8765
-    private var token: String = ""
     private var reconnectTask: Task<Void, Never>?
     private var shouldStayConnected = false
     private var hasConnectedOnce = false
@@ -42,12 +41,11 @@ final class GamepadConnection: ObservableObject {
         if events.count > 12 { events.removeFirst(events.count - 12) }
     }
 
-    func connect(host: String, port: UInt16, token: String) {
+    func connect(host: String, port: UInt16) {
         events.removeAll()
         log("connexion à \(host):\(port)")
         self.host = host
         self.port = port
-        self.token = token
         shouldStayConnected = true
         hasConnectedOnce = false
         reconnectAttempt = 0
@@ -199,10 +197,7 @@ final class GamepadConnection: ObservableObject {
     }
 
     private func sendHello() {
-        let escapedToken = token
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        sendRawUnconditionally("{\"type\":\"hello\",\"protocolVersion\":\(Self.protocolVersion),\"token\":\"\(escapedToken)\",\"platform\":\"ios\"}")
+        sendRawUnconditionally("{\"type\":\"hello\",\"protocolVersion\":\(Self.protocolVersion),\"platform\":\"ios\"}")
     }
 
     private func handleIncoming(_ data: Data) {

@@ -5,7 +5,6 @@ import asyncio
 import json
 import logging
 import os
-import secrets
 import socket
 import sys
 
@@ -21,7 +20,6 @@ except ImportError:
     ZEROCONF_AVAILABLE = False
 
 HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gamepad_controller.html")
-TOKEN_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".pairing_token")
 MDNS_SERVICE_TYPE = "_gamepad._tcp.local."
 PROTOCOL_VERSION = 1
 
@@ -84,23 +82,6 @@ def to_axis_value(f: float) -> int:
 def to_trigger_value(f: float) -> int:
     f = clamp(f, 0.0, 1.0)
     return int(f * 255)
-
-def load_or_create_token() -> str:
-    try:
-        with open(TOKEN_PATH, "r") as f:
-            token = f.read().strip()
-            if token:
-                return token
-    except FileNotFoundError:
-        pass
-    token = secrets.token_hex(16)
-    try:
-        with open(TOKEN_PATH, "w") as f:
-            f.write(token)
-        os.chmod(TOKEN_PATH, 0o600)
-    except OSError as exc:
-        log.warning("Impossible d'enregistrer le token (%s), il changera au prochain démarrage", exc)
-    return token
 
 XBOX360_VENDOR = 0x045e
 XBOX360_PRODUCT = 0x028e
@@ -217,7 +198,7 @@ async def deadman_watchdog(gamepad: VirtualGamepad, last_seen: dict, stop_event:
     except asyncio.CancelledError:
         pass
 
-async def handler(websocket, pool: GamepadPool, token: str):
+async def handler(websocket, pool: GamepadPool):
     disable_nagle(websocket)
     peer = websocket.remote_address
     log.info("iPhone connecté depuis %s, en attente du handshake", peer)
@@ -230,10 +211,6 @@ async def handler(websocket, pool: GamepadPool, token: str):
         hello = json.loads(raw)
         if hello.get("type") != "hello":
             await websocket.send(json.dumps({"type": "hello_ack", "ok": False, "reason": "handshake attendu"}))
-            return
-        if hello.get("token") != token:
-            log.warning("Token invalide depuis %s", peer)
-            await websocket.send(json.dumps({"type": "hello_ack", "ok": False, "reason": "token invalide"}))
             return
 
         slot_and_pad = await pool.acquire()
@@ -370,25 +347,22 @@ def run_doctor() -> int:
 
     ip = local_ip()
     print(f"[INFO] adresse IP locale détectée : {ip}")
-    print(f"[INFO] token d'appairage : {TOKEN_PATH} ({'existe' if os.path.exists(TOKEN_PATH) else 'sera généré au démarrage'})")
 
     print("== résultat:", "OK" if ok else "PROBLÈMES DÉTECTÉS", "==")
     return 0 if ok else 1
 
 async def main(host="0.0.0.0", port=8765, max_pads=4):
-    token = load_or_create_token()
     pool = GamepadPool(max_pads=max_pads)
     zc = start_mdns(port)
     try:
         async with websockets.serve(
-            lambda ws: handler(ws, pool, token),
+            lambda ws: handler(ws, pool),
             host,
             port,
             process_request=process_request,
         ):
             ip = local_ip()
             log.info("Serveur sur http://%s:%d (page web + WebSocket sur le même port)", ip, port)
-            log.info("Token d'appairage : %s (voir %s)", token, TOKEN_PATH)
             log.info("Jusqu'à %d manette(s) virtuelle(s) simultanée(s).", max_pads)
             await asyncio.Future()
     finally:

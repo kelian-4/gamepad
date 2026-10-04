@@ -24,11 +24,6 @@ struct ConnectView: View {
                 TextField("Port", text: $state.serverPort)
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.numberPad)
-
-                TextField("Token d'appairage (affiché au lancement du serveur)", text: $state.pairingToken)
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
             }
             .frame(maxWidth: 280)
 
@@ -55,6 +50,18 @@ struct ConnectView: View {
                             }
                         }
                     }
+                }
+                .frame(maxWidth: 280)
+            } else if discovery.permissionSuspected {
+                VStack(spacing: 4) {
+                    Text("Aucun serveur trouvé. L'app n'a peut-être pas la permission d'accéder au réseau local.")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                        .multilineTextAlignment(.center)
+                    Text("Vérifie Réglages > Gamepad > Réseau local, ou utilise l'IP manuellement.")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.6))
+                        .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: 280)
             } else if discovery.searchedWithNoResult {
