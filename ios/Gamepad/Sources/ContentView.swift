@@ -18,6 +18,7 @@ private struct Root: View {
                 EdgeGestureDeferringHost {
                     PadView(connection: connection)
                 }
+                .ignoresSafeArea()
             } else {
                 ConnectView(connection: connection)
             }
