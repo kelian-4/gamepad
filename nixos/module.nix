@@ -9,6 +9,9 @@ let
     ps.websockets
     ps.zeroconf
   ]);
+  gamepadServerWrapper = pkgs.writeShellScriptBin "gamepad-server" ''
+    exec ${pythonEnv}/bin/python3 "$@"
+  '';
 in
 {
   options.programs.gamepadServer = {
@@ -41,6 +44,6 @@ in
       allowedUDPPorts = [ 5353 ];
     };
 
-    environment.systemPackages = [ pythonEnv ];
+    environment.systemPackages = [ gamepadServerWrapper ];
   };
 }

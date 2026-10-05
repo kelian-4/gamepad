@@ -184,6 +184,8 @@ final class GamepadConnection: ObservableObject {
         }
     }
 
+    private static let pingInterval: UInt64 = 150_000_000
+
     private func startPing() {
         pingTask?.cancel()
         pingTask = Task { [weak self] in
@@ -191,7 +193,7 @@ final class GamepadConnection: ObservableObject {
                 guard let self else { return }
                 let t = DispatchTime.now().uptimeNanoseconds
                 self.sendRaw("{\"type\":\"ping\",\"t\":\(t)}")
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                try? await Task.sleep(nanoseconds: Self.pingInterval)
             }
         }
     }

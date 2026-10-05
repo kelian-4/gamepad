@@ -17,10 +17,10 @@ Pour installer sur un iPhone : télécharger le `.ipa` depuis les artifacts du r
 
 ## Utilisation
 
-1. Sur la machine Linux (NixOS) : `python3 server/gamepad_server.py` (dépendances : voir `server/requirements.txt`, ou le module NixOS dans `nixos/`)
+1. Sur la machine Linux : `python3 server/gamepad_server.py` (dépendances : voir `server/requirements.txt`). **Sur NixOS avec le module (`nixos/`) activé, utilise `gamepad-server server/gamepad_server.py` à la place** — le `python3` du système n'a pas les dépendances (`evdev`/`websockets`/`zeroconf`), c'est `gamepad-server` qui les fournit sans entrer en conflit avec le `python3` système.
 2. Sur le téléphone : ouvrir l'app, soit toucher « Rechercher automatiquement » (découverte mDNS sur le réseau local), soit entrer l'IP + le port (8765 par défaut) à la main, puis se connecter.
 
-Diagnostic de l'environnement serveur : `python3 server/gamepad_server.py doctor`.
+Diagnostic de l'environnement serveur : `python3 server/gamepad_server.py doctor` (ou `gamepad-server server/gamepad_server.py doctor` sur NixOS).
 
 ### Latence sous forte charge CPU (jeu lourd)
 
@@ -34,7 +34,7 @@ sudo chrt -r 10 python3 server/gamepad_server.py
 
 ### Robustesse
 
-- **Deadman côté serveur** : si aucun message n'arrive pendant 400 ms (Wi-Fi coupé, app en arrière-plan, téléphone verrouillé), le serveur remet tous les boutons/axes au neutre pour éviter un stick ou un bouton bloqué.
+- **Deadman côté serveur** : si aucun message n'arrive pendant 1,2 s (Wi-Fi coupé, app en arrière-plan, téléphone verrouillé), le serveur remet tous les boutons/axes au neutre pour éviter un stick ou un bouton bloqué. L'app envoie un ping toutes les 150 ms pour garder la connexion active même quand rien ne change (bouton maintenu, stick immobile), avec une large marge sous le seuil du deadman.
 - **Reconnexion côté app** : backoff exponentiel (0.5s à 10s max) après une perte de connexion établie, avec un indicateur discret "Reconnexion… (n)" à l'écran plutôt qu'un retour à l'écran de connexion. Un échec de première connexion (mauvaise IP/port, serveur éteint) n'affiche jamais l'interface de la manette et ne boucle pas indéfiniment.
 - **Identité Xbox 360 émulée** : la manette virtuelle s'annonce avec le VID/PID `045e:028e` (Xbox 360), reconnue nativement par Steam/Proton/SDL.
 - **Cycle de vie iOS** : écran toujours allumé pendant l'utilisation (`isIdleTimerDisabled`), gestes système (Centre de contrôle, Dock) différés sur les bords de l'écran pour éviter de les déclencher accidentellement en jeu.

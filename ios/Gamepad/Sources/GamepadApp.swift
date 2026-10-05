@@ -22,13 +22,6 @@ struct GamepadApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(state)
-                .onAppear(perform: forceLandscape)
         }
-    }
-
-    private func forceLandscape() {
-        guard let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene }).first else { return }
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape))
     }
 }

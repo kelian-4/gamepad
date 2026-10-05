@@ -4,6 +4,13 @@ import UIKit
 final class EdgeGestureDeferringViewController: UIViewController {
     override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .all }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
+
+    var childContentView: UIView?
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        childContentView?.frame = view.bounds
+    }
 }
 
 struct EdgeGestureDeferringHost<Content: View>: UIViewControllerRepresentable {
@@ -20,15 +27,11 @@ struct EdgeGestureDeferringHost<Content: View>: UIViewControllerRepresentable {
             child.safeAreaRegions = []
         }
         child.view.backgroundColor = .clear
+        child.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         host.addChild(child)
         host.view.addSubview(child.view)
-        child.view.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            child.view.topAnchor.constraint(equalTo: host.view.topAnchor),
-            child.view.bottomAnchor.constraint(equalTo: host.view.bottomAnchor),
-            child.view.leadingAnchor.constraint(equalTo: host.view.leadingAnchor),
-            child.view.trailingAnchor.constraint(equalTo: host.view.trailingAnchor)
-        ])
+        child.view.frame = host.view.bounds
+        host.childContentView = child.view
         child.didMove(toParent: host)
         context.coordinator.child = child
         return host
@@ -36,6 +39,7 @@ struct EdgeGestureDeferringHost<Content: View>: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: EdgeGestureDeferringViewController, context: Context) {
         context.coordinator.child?.rootView = content
+        uiViewController.childContentView?.frame = uiViewController.view.bounds
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
