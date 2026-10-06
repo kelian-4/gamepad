@@ -171,15 +171,19 @@ final class GamepadConnection: ObservableObject {
 
     private func receiveLoop(on conn: NWConnection) {
         conn.receiveMessage { [weak self, weak conn] data, _, _, error in
+            guard let conn else { return }
+            let receivedAt = DispatchTime.now().uptimeNanoseconds
+            if error == nil {
+                self?.receiveLoop(on: conn)
+            }
             Task { @MainActor in
-                guard let self, let conn, self.connection === conn else { return }
+                guard let self, self.connection === conn else { return }
                 if let error {
                     self.log("réception: \(error.localizedDescription)")
                     self.handleConnectionLoss(error.localizedDescription)
                     return
                 }
-                if let data { self.handleIncoming(data) }
-                self.receiveLoop(on: conn)
+                if let data { self.handleIncoming(data, receivedAt: receivedAt) }
             }
         }
     }
@@ -202,16 +206,15 @@ final class GamepadConnection: ObservableObject {
         sendRawUnconditionally("{\"type\":\"hello\",\"protocolVersion\":\(Self.protocolVersion),\"platform\":\"ios\"}")
     }
 
-    private func handleIncoming(_ data: Data) {
+    private func handleIncoming(_ data: Data, receivedAt: UInt64) {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = obj["type"] as? String else { return }
 
         switch type {
         case "ping":
             guard let sent = (obj["t"] as? NSNumber)?.uint64Value else { return }
-            let now = DispatchTime.now().uptimeNanoseconds
-            guard now >= sent else { return }
-            latencyMs = Int((now - sent) / 1_000_000)
+            guard receivedAt >= sent else { return }
+            latencyMs = Int((receivedAt - sent) / 1_000_000)
 
         case "hello_ack":
             let ok = (obj["ok"] as? Bool) ?? false

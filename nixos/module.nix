@@ -42,6 +42,15 @@ in
     networking.firewall = mkIf cfg.openFirewall {
       allowedTCPPorts = [ cfg.port ];
       allowedUDPPorts = [ 5353 ];
+      extraInputRules = ''
+        ip daddr 224.0.0.251 udp dport 5353 accept
+      '';
+      extraCommands = ''
+        iptables -A nixos-fw -d 224.0.0.251 -p udp --dport 5353 -j nixos-fw-accept || true
+      '';
+      extraStopCommands = ''
+        iptables -D nixos-fw -d 224.0.0.251 -p udp --dport 5353 -j nixos-fw-accept || true
+      '';
     };
 
     environment.systemPackages = [ gamepadServerWrapper ];
