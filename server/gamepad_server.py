@@ -14,7 +14,8 @@ from websockets.datastructures import Headers
 from evdev import UInput, ecodes as e, AbsInfo
 
 try:
-    from zeroconf import ServiceInfo, Zeroconf
+    from zeroconf import ServiceInfo
+    from zeroconf.asyncio import AsyncZeroconf
     ZEROCONF_AVAILABLE = True
 except ImportError:
     ZEROCONF_AVAILABLE = False
@@ -282,12 +283,12 @@ def local_ip() -> str:
     finally:
         s.close()
 
-def start_mdns(port: int) -> "Zeroconf | None":
+async def start_mdns(port: int) -> "AsyncZeroconf | None":
     if not ZEROCONF_AVAILABLE:
         log.warning("zeroconf non installé, découverte auto désactivée (pip install zeroconf)")
         return None
     try:
-        zc = Zeroconf()
+        aiozc = AsyncZeroconf()
         ip = local_ip()
         hostname = socket.gethostname().split(".")[0]
         info = ServiceInfo(
@@ -298,9 +299,9 @@ def start_mdns(port: int) -> "Zeroconf | None":
             properties={"proto": str(PROTOCOL_VERSION)},
             server=f"{hostname}.local.",
         )
-        zc.register_service(info)
+        await aiozc.async_register_service(info)
         log.info("Annonce mDNS active (%s, hôte %s.local.)", MDNS_SERVICE_TYPE, hostname)
-        return zc
+        return aiozc
     except Exception as exc:
         log.warning("mDNS indisponible: %s: %r", type(exc).__name__, exc, exc_info=True)
         return None
@@ -353,7 +354,7 @@ def run_doctor() -> int:
 
 async def main(host="0.0.0.0", port=8765, max_pads=4):
     pool = GamepadPool(max_pads=max_pads)
-    zc = start_mdns(port)
+    aiozc = await start_mdns(port)
     try:
         async with websockets.serve(
             lambda ws: handler(ws, pool),
@@ -366,8 +367,8 @@ async def main(host="0.0.0.0", port=8765, max_pads=4):
             log.info("Jusqu'à %d manette(s) virtuelle(s) simultanée(s).", max_pads)
             await asyncio.Future()
     finally:
-        if zc is not None:
-            zc.close()
+        if aiozc is not None:
+            await aiozc.async_close()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Serveur de manette virtuelle")
