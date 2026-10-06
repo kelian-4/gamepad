@@ -302,7 +302,7 @@ def start_mdns(port: int) -> "Zeroconf | None":
         log.info("Annonce mDNS active (%s, hôte %s.local.)", MDNS_SERVICE_TYPE, hostname)
         return zc
     except Exception as exc:
-        log.warning("mDNS indisponible: %s", exc)
+        log.warning("mDNS indisponible: %s: %r", type(exc).__name__, exc, exc_info=True)
         return None
 
 def run_doctor() -> int:
