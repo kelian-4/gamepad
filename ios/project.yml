@@ -16,6 +16,9 @@ targets:
       path: Gamepad/Resources/Info.plist
       properties:
         UILaunchScreen: {}
+        NSLocalNetworkUsageDescription: "L'app a besoin d'accéder au réseau local pour se connecter au serveur de la manette virtuelle."
+        NSBonjourServices:
+          - _gamepad._tcp
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kelian.gamepad
