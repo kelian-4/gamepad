@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import errno
 import json
 import logging
 import os
@@ -36,6 +37,20 @@ class ProbeDisconnectFilter(logging.Filter):
         )
 
 logging.getLogger("websockets.server").addFilter(ProbeDisconnectFilter())
+
+class NetworkDropFilter(logging.Filter):
+    NETWORK_ERRNOS = {errno.ENETUNREACH, errno.ENETDOWN, errno.EHOSTUNREACH}
+
+    def filter(self, record):
+        exc = record.exc_info[1] if record.exc_info else None
+        if isinstance(exc, OSError) and exc.errno in self.NETWORK_ERRNOS:
+            record.msg = "mDNS: réseau injoignable pendant un envoi (%s), le serveur continue de tourner"
+            record.args = (exc.strerror,)
+            record.exc_info = None
+            record.exc_text = None
+        return True
+
+logging.getLogger("zeroconf").addFilter(NetworkDropFilter())
 
 AXIS_MIN = -32768
 AXIS_MAX = 32767
