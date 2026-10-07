@@ -27,6 +27,16 @@ PROTOCOL_VERSION = 1
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("gamepad")
 
+class ProbeDisconnectFilter(logging.Filter):
+    def filter(self, record):
+        exc = record.exc_info[1] if record.exc_info else None
+        return not (
+            isinstance(exc, websockets.exceptions.InvalidMessage)
+            and isinstance(exc.__cause__, EOFError)
+        )
+
+logging.getLogger("websockets.server").addFilter(ProbeDisconnectFilter())
+
 AXIS_MIN = -32768
 AXIS_MAX = 32767
 
