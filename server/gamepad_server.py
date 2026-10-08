@@ -8,6 +8,7 @@ import logging
 import os
 import socket
 import sys
+import time
 
 import websockets
 from websockets.http11 import Response
@@ -212,6 +213,48 @@ def disable_nagle(websocket):
     except Exception as exc:
         log.warning("TCP_NODELAY non appliqué: %s", exc)
 
+class DiagStats:
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.messages = 0
+        self.ping_gap_max = 0.0
+        self.process_max = 0.0
+        self.echo_max = 0.0
+
+async def diag_monitor(diag: DiagStats):
+    loop = asyncio.get_running_loop()
+    tick = 0.01
+    lag_sum = 0.0
+    lag_max = 0.0
+    lag_count = 0
+    report_at = loop.time() + 1.0
+    while True:
+        started = loop.time()
+        await asyncio.sleep(tick)
+        now = loop.time()
+        lag = max(0.0, now - started - tick)
+        lag_sum += lag
+        lag_max = max(lag_max, lag)
+        lag_count += 1
+        if now >= report_at:
+            if diag.messages:
+                log.info(
+                    "diag: retard boucle moy %.2f max %.2f ms | %d msg | écart max entre pings %.0f ms | traitement max %.2f ms | écho max %.2f ms",
+                    lag_sum / lag_count * 1000,
+                    lag_max * 1000,
+                    diag.messages,
+                    diag.ping_gap_max * 1000,
+                    diag.process_max * 1000,
+                    diag.echo_max * 1000,
+                )
+            diag.reset()
+            lag_sum = 0.0
+            lag_max = 0.0
+            lag_count = 0
+            report_at = now + 1.0
+
 async def deadman_watchdog(gamepad: VirtualGamepad, last_seen: dict, stop_event: asyncio.Event):
     try:
         while not stop_event.is_set():
@@ -224,7 +267,7 @@ async def deadman_watchdog(gamepad: VirtualGamepad, last_seen: dict, stop_event:
     except asyncio.CancelledError:
         pass
 
-async def handler(websocket, pool: GamepadPool):
+async def handler(websocket, pool: GamepadPool, diag: DiagStats):
     disable_nagle(websocket)
     peer = websocket.remote_address
     log.info("iPhone connecté depuis %s, en attente du handshake", peer)
@@ -260,6 +303,7 @@ async def handler(websocket, pool: GamepadPool):
 
     last_seen = {"t": asyncio.get_event_loop().time(), "neutral": False}
     watchdog_task = asyncio.create_task(deadman_watchdog(gamepad, last_seen, stop_event))
+    last_ping = None
     try:
         async for raw in websocket:
             try:
@@ -267,12 +311,21 @@ async def handler(websocket, pool: GamepadPool):
             except json.JSONDecodeError:
                 log.warning("JSON invalide: %r", raw)
                 continue
-            last_seen["t"] = asyncio.get_event_loop().time()
+            now = asyncio.get_event_loop().time()
+            last_seen["t"] = now
             last_seen["neutral"] = False
+            diag.messages += 1
             if msg.get("type") == "ping":
+                if last_ping is not None:
+                    diag.ping_gap_max = max(diag.ping_gap_max, now - last_ping)
+                last_ping = now
+                started = time.perf_counter()
                 await websocket.send(raw)
+                diag.echo_max = max(diag.echo_max, time.perf_counter() - started)
                 continue
+            started = time.perf_counter()
             gamepad.handle_message(msg)
+            diag.process_max = max(diag.process_max, time.perf_counter() - started)
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
@@ -377,12 +430,14 @@ def run_doctor() -> int:
     print("== résultat:", "OK" if ok else "PROBLÈMES DÉTECTÉS", "==")
     return 0 if ok else 1
 
-async def main(host="0.0.0.0", port=8765, max_pads=4):
+async def main(host="0.0.0.0", port=8765, max_pads=4, diag_enabled=False):
     pool = GamepadPool(max_pads=max_pads)
+    diag = DiagStats()
+    diag_task = asyncio.create_task(diag_monitor(diag)) if diag_enabled else None
     aiozc = await start_mdns(port)
     try:
         async with websockets.serve(
-            lambda ws: handler(ws, pool),
+            lambda ws: handler(ws, pool, diag),
             host,
             port,
             process_request=process_request,
@@ -392,6 +447,8 @@ async def main(host="0.0.0.0", port=8765, max_pads=4):
             log.info("Jusqu'à %d manette(s) virtuelle(s) simultanée(s).", max_pads)
             await asyncio.Future()
     finally:
+        if diag_task is not None:
+            diag_task.cancel()
         if aiozc is not None:
             await aiozc.async_close()
 
@@ -400,6 +457,7 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--max-pads", type=int, default=4)
+    parser.add_argument("--diag", action="store_true", help="affiche chaque seconde le retard de la boucle et les écarts de ping")
     parser.add_argument("doctor_cmd", nargs="?", default=None, help="passer 'doctor' pour diagnostiquer l'environnement")
     args = parser.parse_args()
 
@@ -407,6 +465,6 @@ if __name__ == "__main__":
         sys.exit(run_doctor())
 
     try:
-        asyncio.run(main(host=args.host, port=args.port, max_pads=args.max_pads))
+        asyncio.run(main(host=args.host, port=args.port, max_pads=args.max_pads, diag_enabled=args.diag))
     except KeyboardInterrupt:
         log.info("Arrêt du serveur.")

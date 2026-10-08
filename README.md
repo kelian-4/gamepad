@@ -32,6 +32,20 @@ sudo chrt -r 10 python3 server/gamepad_server.py
 
 `chrt` nécessite root ou la capacité `CAP_SYS_NICE`. Confirmé en conditions réelles (jeu lourd) : sans `chrt`, latence de 400 à 2000 ms ; avec `chrt -r 10`, jeu fluide. Le traitement d'un message par le serveur lui-même ne dépassait jamais 1 ms pendant ces tests, la cause était donc bien le scheduling du processus sous charge CPU, pas le code du serveur.
 
+### Diagnostic de latence (`--diag`)
+
+Pour savoir d'où vient une latence ou un ping irrégulier, lancer le serveur avec `--diag` (par exemple `sudo chrt -r 10 gamepad-server server/gamepad_server.py --diag`). Chaque seconde où des messages arrivent, il affiche une ligne :
+
+```
+diag: retard boucle moy 0.63 max 11.72 ms | 62 msg | écart max entre pings 151 ms | traitement max 0.03 ms | écho max 0.05 ms
+```
+
+- **retard boucle** : retard de la boucle asyncio du serveur par rapport à l'horloge. Un max élevé (plusieurs ms) indique que le processus n'a pas eu le CPU à temps (scheduling, `chrt` absent, charge).
+- **écart max entre pings** : intervalle le plus long entre deux pings reçus de l'iPhone, envoyés toutes les 150 ms. Un écart bien au-dessus de 150 ms alors que le retard de boucle est faible indique un délai avant l'arrivée des données (envoi côté iPhone ou trajet réseau).
+- **traitement max / écho max** : temps passé par le serveur à traiter un message et à renvoyer un ping.
+
+Sans `--diag`, aucune de ces lignes n'est affichée.
+
 ### Robustesse
 
 - **Deadman côté serveur** : si aucun message n'arrive pendant 1,2 s (Wi-Fi coupé, app en arrière-plan, téléphone verrouillé), le serveur remet tous les boutons/axes au neutre pour éviter un stick ou un bouton bloqué. L'app envoie un ping toutes les 150 ms pour garder la connexion active même quand rien ne change (bouton maintenu, stick immobile), avec une large marge sous le seuil du deadman.
