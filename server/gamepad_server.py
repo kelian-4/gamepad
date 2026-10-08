@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import collections
 import errno
 import json
 import logging
@@ -220,6 +221,9 @@ class DiagStats:
     def reset(self):
         self.messages = 0
         self.ping_gap_max = 0.0
+        self.up_sum = 0.0
+        self.up_count = 0
+        self.up_max = 0.0
         self.process_max = 0.0
         self.echo_max = 0.0
 
@@ -241,11 +245,13 @@ async def diag_monitor(diag: DiagStats):
         if now >= report_at:
             if diag.messages:
                 log.info(
-                    "diag: retard boucle moy %.2f max %.2f ms | %d msg | écart max entre pings %.0f ms | traitement max %.2f ms | écho max %.2f ms",
+                    "diag: retard boucle moy %.2f max %.2f ms | %d msg | écart max entre pings %.0f ms | montée relative moy %.1f max %.1f ms | traitement max %.2f ms | écho max %.2f ms",
                     lag_sum / lag_count * 1000,
                     lag_max * 1000,
                     diag.messages,
                     diag.ping_gap_max * 1000,
+                    diag.up_sum / diag.up_count if diag.up_count else 0.0,
+                    diag.up_max,
                     diag.process_max * 1000,
                     diag.echo_max * 1000,
                 )
@@ -304,6 +310,7 @@ async def handler(websocket, pool: GamepadPool, diag: DiagStats):
     last_seen = {"t": asyncio.get_event_loop().time(), "neutral": False}
     watchdog_task = asyncio.create_task(deadman_watchdog(gamepad, last_seen, stop_event))
     last_ping = None
+    up_window = collections.deque()
     try:
         async for raw in websocket:
             try:
@@ -319,6 +326,15 @@ async def handler(websocket, pool: GamepadPool, diag: DiagStats):
                 if last_ping is not None:
                     diag.ping_gap_max = max(diag.ping_gap_max, now - last_ping)
                 last_ping = now
+                sent = msg.get("t")
+                if isinstance(sent, (int, float)):
+                    up_window.append((now, (time.monotonic_ns() - sent) / 1e6))
+                    while now - up_window[0][0] > 10.0:
+                        up_window.popleft()
+                    up = up_window[-1][1] - min(value for _, value in up_window)
+                    diag.up_sum += up
+                    diag.up_count += 1
+                    diag.up_max = max(diag.up_max, up)
                 started = time.perf_counter()
                 await websocket.send(raw)
                 diag.echo_max = max(diag.echo_max, time.perf_counter() - started)

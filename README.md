@@ -37,11 +37,12 @@ sudo chrt -r 10 python3 server/gamepad_server.py
 Pour savoir d'où vient une latence ou un ping irrégulier, lancer le serveur avec `--diag` (par exemple `sudo chrt -r 10 gamepad-server server/gamepad_server.py --diag`). Chaque seconde où des messages arrivent, il affiche une ligne :
 
 ```
-diag: retard boucle moy 0.63 max 11.72 ms | 62 msg | écart max entre pings 151 ms | traitement max 0.03 ms | écho max 0.05 ms
+diag: retard boucle moy 0.63 max 11.72 ms | 62 msg | écart max entre pings 151 ms | montée relative moy 0.4 max 2.1 ms | traitement max 0.03 ms | écho max 0.05 ms
 ```
 
 - **retard boucle** : retard de la boucle asyncio du serveur par rapport à l'horloge. Un max élevé (plusieurs ms) indique que le processus n'a pas eu le CPU à temps (scheduling, `chrt` absent, charge).
 - **écart max entre pings** : intervalle le plus long entre deux pings reçus de l'iPhone, envoyés toutes les 150 ms. Un écart bien au-dessus de 150 ms alors que le retard de boucle est faible indique un délai avant l'arrivée des données (envoi côté iPhone ou trajet réseau).
+- **montée relative** : variation du délai iPhone → PC seul. Chaque ping contient l'heure d'envoi de l'iPhone, comparée à l'heure d'arrivée au serveur ; le décalage constant entre les deux horloges est éliminé en retranchant le meilleur délai observé sur les 10 dernières secondes. Une montée max proche des variations du ping affiché dans l'app (par exemple 30 à 40 ms) indique que la variation se produit entre l'envoi iPhone et l'arrivée au PC ; une montée stable alors que le ping varie indique le retour vers l'iPhone ou la réception côté app.
 - **traitement max / écho max** : temps passé par le serveur à traiter un message et à renvoyer un ping.
 
 Sans `--diag`, aucune de ces lignes n'est affichée.
