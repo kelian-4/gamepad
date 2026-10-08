@@ -29,6 +29,10 @@ final class GamepadConnection: ObservableObject {
 
     private var pingTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
+    private var latencySamples: [Int] = []
+    private var lastLatencyPublish: UInt64 = 0
+    private static let latencyWindow = 10
+    private static let latencyPublishInterval: UInt64 = 500_000_000
     private var pendingSticks: [String: (x: Double, y: Double)] = [:]
     private var lastSentSticks: [String: (x: Double, y: Double)] = [:]
     private var stickFlushScheduled = false
@@ -68,6 +72,8 @@ final class GamepadConnection: ObservableObject {
         pingTask?.cancel()
         pingTask = nil
         latencyMs = nil
+        latencySamples.removeAll()
+        lastLatencyPublish = 0
         pendingSticks.removeAll()
         lastSentSticks.removeAll()
         stickFlushScheduled = false
@@ -214,7 +220,14 @@ final class GamepadConnection: ObservableObject {
         case "ping":
             guard let sent = (obj["t"] as? NSNumber)?.uint64Value else { return }
             guard receivedAt >= sent else { return }
-            latencyMs = Int((receivedAt - sent) / 1_000_000)
+            latencySamples.append(Int((receivedAt - sent) / 1_000_000))
+            if latencySamples.count > Self.latencyWindow {
+                latencySamples.removeFirst(latencySamples.count - Self.latencyWindow)
+            }
+            if latencyMs == nil || receivedAt >= lastLatencyPublish + Self.latencyPublishInterval {
+                latencyMs = latencySamples.reduce(0, +) / latencySamples.count
+                lastLatencyPublish = receivedAt
+            }
 
         case "hello_ack":
             let ok = (obj["ok"] as? Bool) ?? false
