@@ -13,6 +13,7 @@ import time
 
 import websockets
 from evdev import UInput, ecodes as e, AbsInfo
+from evdev.uinput import UInputError
 
 try:
     from zeroconf import ServiceInfo
@@ -108,6 +109,13 @@ def to_trigger_value(f: float) -> int:
     f = clamp(f, 0.0, 1.0)
     return int(f * 255)
 
+def uinput_problem():
+    if not os.path.exists("/dev/uinput"):
+        return "/dev/uinput absent (module uinput non chargé, ou hardware.uinput.enable sur NixOS)"
+    if not os.access("/dev/uinput", os.R_OK | os.W_OK):
+        return "/dev/uinput inaccessible : lance le serveur avec sudo ou ajoute ton utilisateur au groupe uinput"
+    return None
+
 XBOX360_VENDOR = 0x045e
 XBOX360_PRODUCT = 0x028e
 
@@ -196,7 +204,11 @@ class GamepadPool:
             if not self._free_slots:
                 return None
             slot = self._free_slots.pop(0)
-            return slot, VirtualGamepad(index=slot)
+            try:
+                return slot, VirtualGamepad(index=slot)
+            except Exception:
+                self._free_slots.insert(0, slot)
+                raise
 
     async def release(self, slot: int):
         async with self._lock:
@@ -285,7 +297,17 @@ async def handler(websocket, pool: GamepadPool, diag: DiagStats):
             await websocket.send(json.dumps({"type": "hello_ack", "ok": False, "reason": "handshake attendu"}))
             return
 
-        slot_and_pad = await pool.acquire()
+        try:
+            slot_and_pad = await pool.acquire()
+        except (UInputError, OSError) as exc:
+            reason = uinput_problem() or f"{type(exc).__name__}: {exc}"
+            log.error("Création de la manette virtuelle impossible pour %s : %s", peer, reason)
+            await websocket.send(json.dumps({
+                "type": "hello_ack",
+                "ok": False,
+                "reason": f"Le serveur ne peut pas créer la manette virtuelle : {reason}",
+            }))
+            return
         if slot_and_pad is None:
             await websocket.send(json.dumps({"type": "hello_ack", "ok": False, "reason": "nombre maximum de manettes atteint"}))
             return
@@ -431,6 +453,9 @@ def run_doctor() -> int:
 
 async def main(host="0.0.0.0", port=8765, max_pads=4, diag_enabled=False):
     pool = GamepadPool(max_pads=max_pads)
+    problem = uinput_problem()
+    if problem:
+        log.warning("Les manettes virtuelles ne pourront pas être créées : %s", problem)
     diag = DiagStats()
     diag_task = asyncio.create_task(diag_monitor(diag)) if diag_enabled else None
     aiozc = await start_mdns(port)
