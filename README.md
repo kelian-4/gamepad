@@ -17,7 +17,9 @@ Pour installer sur un iPhone : télécharger le `.ipa` depuis les artifacts du r
 ## Utilisation
 
 1. Sur la machine Linux : `python3 server/gamepad_server.py` (dépendances : voir `server/requirements.txt`). **Sur NixOS avec le module (`nixos/`) activé, utilise `gamepad-server server/gamepad_server.py` à la place** — le `python3` du système n'a pas les dépendances (`evdev`/`websockets`/`zeroconf`), c'est `gamepad-server` qui les fournit sans entrer en conflit avec le `python3` système.
-2. Sur le téléphone : ouvrir l'app, soit toucher « Rechercher automatiquement » (découverte mDNS sur le réseau local), soit entrer l'IP + le port (8765 par défaut) à la main, puis se connecter.
+2. Sur le téléphone : ouvrir l'app, puis soit toucher « Scanner un QR code » et viser le QR code affiché par le serveur dans le terminal (connexion automatique), soit toucher « Rechercher automatiquement » (découverte mDNS sur le réseau local), soit entrer l'IP + le port (8765 par défaut) à la main, puis se connecter.
+
+Le QR code (`gamepad://ip:port`) s'affiche au démarrage du serveur quand il tourne dans un terminal interactif et que le module Python `qrcode` est installé (inclus dans `server/requirements.txt` et dans le module NixOS) ; sinon seule l'adresse est loggée.
 
 Diagnostic de l'environnement serveur : `python3 server/gamepad_server.py doctor` (ou `gamepad-server server/gamepad_server.py doctor` sur NixOS).
 

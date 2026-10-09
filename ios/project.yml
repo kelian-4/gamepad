@@ -19,6 +19,7 @@ targets:
         NSLocalNetworkUsageDescription: "L'app a besoin d'accéder au réseau local pour se connecter au serveur de la manette virtuelle."
         NSBonjourServices:
           - _gamepad._tcp
+        NSCameraUsageDescription: "La caméra sert à scanner le QR code affiché par le serveur pour s'y connecter."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kelian.gamepad

@@ -4,6 +4,7 @@ struct ConnectView: View {
     @EnvironmentObject var state: GamepadState
     @ObservedObject var connection: GamepadConnection
     @StateObject private var discovery = ServerDiscovery()
+    @State private var showingScanner = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -34,6 +35,13 @@ struct ConnectView: View {
                     .font(.footnote)
             }
             .disabled(discovery.isSearching)
+
+            Button {
+                showingScanner = true
+            } label: {
+                Label("Scanner un QR code", systemImage: "qrcode.viewfinder")
+                    .font(.footnote)
+            }
 
             if !discovery.results.isEmpty {
                 VStack(spacing: 6) {
@@ -89,6 +97,14 @@ struct ConnectView: View {
         .padding()
         .onDisappear {
             discovery.stop()
+        }
+        .sheet(isPresented: $showingScanner) {
+            QRScannerView { host, port in
+                discovery.stop()
+                state.serverHost = host
+                state.serverPort = String(port)
+                state.connect()
+            }
         }
     }
 
