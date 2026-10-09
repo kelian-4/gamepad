@@ -22,6 +22,12 @@ try:
 except ImportError:
     ZEROCONF_AVAILABLE = False
 
+try:
+    import qrcode
+    QRCODE_AVAILABLE = True
+except ImportError:
+    QRCODE_AVAILABLE = False
+
 MDNS_SERVICE_TYPE = "_gamepad._tcp.local."
 PROTOCOL_VERSION = 1
 
@@ -451,6 +457,33 @@ def run_doctor() -> int:
     print("== résultat:", "OK" if ok else "PROBLÈMES DÉTECTÉS", "==")
     return 0 if ok else 1
 
+def render_qr(text: str) -> str:
+    qr = qrcode.QRCode(border=4, error_correction=qrcode.constants.ERROR_CORRECT_M)
+    qr.add_data(text)
+    qr.make(fit=True)
+    matrix = qr.get_matrix()
+    if len(matrix) % 2:
+        matrix = matrix + [[False] * len(matrix[0])]
+    lines = []
+    for top_row, bottom_row in zip(matrix[::2], matrix[1::2]):
+        cells = []
+        for top, bottom in zip(top_row, bottom_row):
+            fg = 16 if top else 15
+            bg = 16 if bottom else 15
+            cells.append(f"\x1b[38;5;{fg};48;5;{bg}m\u2580")
+        lines.append("".join(cells) + "\x1b[0m")
+    return "\n".join(lines)
+
+def print_pairing_qr(ip: str, port: int):
+    url = f"gamepad://{ip}:{port}"
+    if not QRCODE_AVAILABLE:
+        log.info("QR code d'appairage indisponible (module qrcode absent). Adresse : %s", url)
+        return
+    if not sys.stdout.isatty():
+        return
+    print(render_qr(url))
+    print(f"Scanne ce QR code depuis l'app ({url})", flush=True)
+
 async def main(host="0.0.0.0", port=8765, max_pads=4, diag_enabled=False):
     pool = GamepadPool(max_pads=max_pads)
     problem = uinput_problem()
@@ -468,6 +501,7 @@ async def main(host="0.0.0.0", port=8765, max_pads=4, diag_enabled=False):
             ip = local_ip()
             log.info("Serveur WebSocket sur %s:%d", ip, port)
             log.info("Jusqu'à %d manette(s) virtuelle(s) simultanée(s).", max_pads)
+            print_pairing_qr(ip, port)
             await asyncio.Future()
     finally:
         if diag_task is not None:

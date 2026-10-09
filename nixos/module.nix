@@ -8,6 +8,7 @@ let
     ps.evdev
     ps.websockets
     ps.zeroconf
+    ps.qrcode
   ]);
   gamepadServerWrapper = pkgs.writeShellScriptBin "gamepad-server" ''
     exec ${pythonEnv}/bin/python3 "$@"
