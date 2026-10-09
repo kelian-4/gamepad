@@ -62,6 +62,7 @@ Sans `--diag`, aucune de ces lignes n'est affichée.
 
 - **Découverte automatique (mDNS/Bonjour)** : le serveur s'annonce sur le réseau local (`_gamepad._tcp`), l'app peut le détecter automatiquement sans saisir l'IP.
 - **Module NixOS** : voir `nixos/module.nix` et `nixos/README.md` — prépare l'environnement (uinput, pare-feu, dépendances Python) sans service systemd.
+- **Profils par jeu** : dans Réglages → Disposition → Profils par jeu, enregistre la disposition actuelle sous un nom (positions, tailles, éléments masqués) pour la retrouver en un geste, ou applique un modèle prêt à l'emploi (Course, Plateforme, Combat, Action/FPS). Chaque application d'un profil demande confirmation avant de remplacer la disposition en cours.
 - **Import/export de disposition** : dans Réglages → Disposition, exporte la disposition actuelle en JSON (partage système) ou importe un fichier JSON existant.
 
 ### Gameplay

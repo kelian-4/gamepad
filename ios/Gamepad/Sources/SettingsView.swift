@@ -90,6 +90,9 @@ struct SettingsView: View {
                 }
 
                 Section("Disposition") {
+                    NavigationLink("Profils par jeu") {
+                        ProfilesView(currentLayout: currentLayout, onApply: onImportLayout)
+                    }
                     Button("Modifier la disposition") { onEditLayout() }
                     Button("Exporter la disposition") { exportLayout() }
                     Button("Importer une disposition") { showImportPicker = true }
