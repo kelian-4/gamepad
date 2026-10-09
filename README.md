@@ -6,7 +6,6 @@ Transforme un smartphone en manette virtuelle pour un PC Linux (NixOS), via WebS
 
 - `ios/` — app SwiftUI native (iOS), générée via [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`project.yml` + sources dans `ios/Gamepad/`)
 - `server/` — serveur Python (`gamepad_server.py`) qui tourne sur la machine Linux cible : reçoit les inputs via WebSocket et crée une manette virtuelle via `evdev`/`uinput`
-- `android/` — app Kotlin native (à venir)
 
 ## CI
 

@@ -12,8 +12,6 @@ import sys
 import time
 
 import websockets
-from websockets.http11 import Response
-from websockets.datastructures import Headers
 from evdev import UInput, ecodes as e, AbsInfo
 
 try:
@@ -23,7 +21,6 @@ try:
 except ImportError:
     ZEROCONF_AVAILABLE = False
 
-HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gamepad_controller.html")
 MDNS_SERVICE_TYPE = "_gamepad._tcp.local."
 PROTOCOL_VERSION = 1
 
@@ -353,20 +350,6 @@ async def handler(websocket, pool: GamepadPool, diag: DiagStats):
         await pool.release(slot)
         log.info("iPhone déconnecté (%s), manette #%d libérée", peer, slot + 1)
 
-async def process_request(connection, request):
-    if request.headers.get("Upgrade", "").lower() == "websocket":
-        return None
-
-    if request.path in ("/", "/gamepad_controller.html"):
-        try:
-            with open(HTML_PATH, "rb") as f:
-                body = f.read()
-        except FileNotFoundError:
-            return Response(404, "Not Found", Headers(), b"gamepad_controller.html introuvable")
-        return Response(200, "OK", Headers([("Content-Type", "text/html; charset=utf-8")]), body)
-
-    return Response(404, "Not Found", Headers(), b"Not Found")
-
 def local_ip() -> str:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -456,10 +439,9 @@ async def main(host="0.0.0.0", port=8765, max_pads=4, diag_enabled=False):
             lambda ws: handler(ws, pool, diag),
             host,
             port,
-            process_request=process_request,
         ):
             ip = local_ip()
-            log.info("Serveur sur http://%s:%d (page web + WebSocket sur le même port)", ip, port)
+            log.info("Serveur WebSocket sur %s:%d", ip, port)
             log.info("Jusqu'à %d manette(s) virtuelle(s) simultanée(s).", max_pads)
             await asyncio.Future()
     finally:
