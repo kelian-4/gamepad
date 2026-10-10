@@ -9,17 +9,19 @@ Le projet est publié sous licence **GNU GPL v3** (voir le fichier `LICENSE`). E
 ## Proposer une modification
 
 1. Fais un fork du dépôt.
-2. Crée une branche à partir de `dev` (jamais de `main`, qui ne reçoit que les versions validées).
+2. Crée une branche.
 3. Fais ta modification, avec un message de commit clair qui explique ce qui change et pourquoi.
 4. Ouvre une pull request vers `dev`.
 
 Avant d'ouvrir ta pull request :
 
 - Garde le code sans commentaires : le code doit se lire de lui-même, avec des noms clairs.
-- Vérifie que l'app iOS compile : le workflow GitHub Actions s'en charge à chaque envoi sur ta branche.
+- Si tu n'as pas de Mac, tu peux vérifier que l'app iOS compile avec GitHub Actions.
 - Une pull request = un sujet. Évite de mélanger plusieurs changements sans rapport.
 
 Pour signaler un bug ou proposer une idée, ouvre une issue en décrivant ce que tu faisais, ce qui s'est passé et ce que tu attendais.
+
+Les pull requests et les issues doivent être écrites à la main, avec tes propres mots. Les textes générés par une IA ne sont pas acceptés.
 
 ## Portages vers d'autres plateformes (Android, etc.)
 
