@@ -116,6 +116,18 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
 
+      - name: Publish release
+        if: github.ref == 'refs/heads/main' && success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Gamepad build ${{ github.run_number }}
+          body: |
+            Fichier IPA non signé de l'app Gamepad.
+            Il doit être signé avant l'installation (Sideloadly ou AltStore avec un Apple ID gratuit, à renouveler tous les 7 jours). Voir le README pour le détail.
+          files: ios/build/Gamepad-unsigned.ipa
+          make_latest: true
+
       - name: Finalize debug log
         if: always()
         run: |
@@ -123,7 +135,7 @@ jobs:
           echo "- Résultat global du job: ${{ job.status }}" >> debug/ci-status.md
 
       - name: Commit debug log
-        if: always()
+        if: always() && github.ref_name != 'main'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
