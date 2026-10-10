@@ -31,4 +31,4 @@ Les portages de l'app vers Android, ou vers toute autre plateforme, sont accept�
 - Les changements doivent être **partagés avec le projet** : pull request vers ce dépôt, ou dépôt public lié depuis le README, pour que tout le monde en profite.
 - Le portage doit rester compatible avec le serveur existant et son protocole, sans le casser pour les autres plateformes. Si une évolution du protocole est nécessaire, propose-la d'abord dans une issue.
 
-La licence GPL v3 impose déjà de publier le code source de tout portage ou dérivé sous la même licence. Le partage avec le projet est une demande du mainteneur, qui permet de garder un seul projet vivant plutôt que des copies éparses.
+La licence GPL v3 impose déjà de publier le code source de tout portage ou dérivé sous la même licence. Le partage avec le projet permet de garder un seul projet vivant plutôt que des copies éparses.
