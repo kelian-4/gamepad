@@ -14,6 +14,10 @@ final class GamepadConnection: ObservableObject {
     @Published private(set) var status: ConnectionStatus = .disconnected
     @Published private(set) var latencyMs: Int?
     @Published private(set) var events: [String] = []
+    @Published private(set) var streamEndpoint: StreamEndpoint?
+
+    let screen = ScreenStreamClient()
+    private(set) var streamSecret: String?
 
     private var connection: NWConnection?
     private let queue = DispatchQueue(label: "com.kelian.gamepad.ws")
@@ -45,11 +49,12 @@ final class GamepadConnection: ObservableObject {
         if events.count > 12 { events.removeFirst(events.count - 12) }
     }
 
-    func connect(host: String, port: UInt16) {
+    func connect(host: String, port: UInt16, streamSecret: String? = nil) {
         events.removeAll()
         log("connexion à \(host):\(port)")
         self.host = host
         self.port = port
+        self.streamSecret = streamSecret
         shouldStayConnected = true
         hasConnectedOnce = false
         reconnectAttempt = 0
@@ -63,10 +68,12 @@ final class GamepadConnection: ObservableObject {
         reconnectTask?.cancel()
         reconnectTask = nil
         teardownCurrentConnection()
+        screen.stop()
         status = .disconnected
     }
 
     private func teardownCurrentConnection() {
+        streamEndpoint = nil
         timeoutTask?.cancel()
         timeoutTask = nil
         pingTask?.cancel()
@@ -237,6 +244,14 @@ final class GamepadConnection: ObservableObject {
                 timeoutTask = nil
                 reconnectAttempt = 0
                 hasConnectedOnce = true
+                let features = (obj["features"] as? [String]) ?? []
+                if features.contains("screen_stream"),
+                   let rawPort = (obj["streamPort"] as? NSNumber)?.intValue,
+                   let streamPort = UInt16(exactly: rawPort) {
+                    streamEndpoint = StreamEndpoint(host: host, port: streamPort)
+                } else {
+                    streamEndpoint = nil
+                }
                 status = .connected
                 startPing()
             } else {

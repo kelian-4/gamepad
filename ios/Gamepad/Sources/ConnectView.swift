@@ -99,10 +99,11 @@ struct ConnectView: View {
             discovery.stop()
         }
         .sheet(isPresented: $showingScanner) {
-            QRScannerView { host, port in
+            QRScannerView { host, port, secret in
                 discovery.stop()
                 state.serverHost = host
                 state.serverPort = String(port)
+                state.streamSecret = secret
                 state.connect()
             }
         }

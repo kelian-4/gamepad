@@ -5,20 +5,24 @@ import AVFoundation
 enum PairingURL {
     static let defaultPort: UInt16 = 8765
 
-    static func parse(_ text: String) -> (host: String, port: UInt16)? {
+    static func parse(_ text: String) -> (host: String, port: UInt16, secret: String?)? {
         guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
               url.scheme == "gamepad",
               let host = url.host, !host.isEmpty else { return nil }
+        let secret = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .first(where: { $0.name == "s" })?
+            .value
         if let rawPort = url.port {
             guard let port = UInt16(exactly: rawPort) else { return nil }
-            return (host, port)
+            return (host, port, secret)
         }
-        return (host, defaultPort)
+        return (host, defaultPort, secret)
     }
 }
 
 struct QRScannerView: View {
-    let onScan: (String, UInt16) -> Void
+    let onScan: (String, UInt16, String?) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var access: Access = .checking
@@ -104,7 +108,7 @@ struct QRScannerView: View {
             return
         }
         finished = true
-        onScan(target.host, target.port)
+        onScan(target.host, target.port, target.secret)
         dismiss()
     }
 }

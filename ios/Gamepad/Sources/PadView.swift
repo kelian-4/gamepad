@@ -3,6 +3,10 @@ import UIKit
 
 struct PadView: View {
     @ObservedObject var connection: GamepadConnection
+    @ObservedObject private var screen: ScreenStreamClient
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("gamepad.stream.quality") private var streamQuality = "auto"
+    @AppStorage("gamepad.background.beforeScreen") private var backgroundBeforeScreen = PadBackground.black.rawValue
     @State private var layout = PadLayout.load()
     @State private var settings = PadSettings.load()
     @State private var editing = false
@@ -12,6 +16,11 @@ struct PadView: View {
     @State private var selectedScale: Double?
     @State private var customBackgroundImage: UIImage? = CustomBackgroundStorage.load()
     @State private var pendingPresetLayoutChange: PadPreset?
+
+    init(connection: GamepadConnection) {
+        _connection = ObservedObject(wrappedValue: connection)
+        _screen = ObservedObject(wrappedValue: connection.screen)
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -41,6 +50,7 @@ struct PadView: View {
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .onAppear {
+            syncStream()
             if bridge == nil {
                 bridge = PadBridge(
                     connection: connection,
@@ -60,6 +70,12 @@ struct PadView: View {
                 )
             }
         }
+        .onDisappear { screen.stop() }
+        .onChange(of: settings.background) { _ in syncStream() }
+        .onChange(of: connection.status) { _ in syncStream() }
+        .onChange(of: connection.streamEndpoint) { _ in syncStream() }
+        .onChange(of: streamQuality) { _ in syncStream() }
+        .onChange(of: scenePhase) { _ in syncStream() }
         .sheet(isPresented: $showSettings) {
             SettingsView(
                 settings: $settings,
@@ -122,7 +138,24 @@ struct PadView: View {
 
     @ViewBuilder
     private var backgroundView: some View {
-        if settings.background == .custom, let customBackgroundImage {
+        if settings.background == .screen {
+            ZStack {
+                staticBackground(for: PadBackground(rawValue: backgroundBeforeScreen) ?? .black)
+                if screen.state == .active {
+                    ScreenStreamView(displayLayer: screen.displayLayer)
+                        .allowsHitTesting(false)
+                        .overlay(Color.black.opacity(0.2))
+                }
+            }
+            .ignoresSafeArea()
+        } else {
+            staticBackground(for: settings.background)
+        }
+    }
+
+    @ViewBuilder
+    private func staticBackground(for background: PadBackground) -> some View {
+        if background == .custom, let customBackgroundImage {
             GeometryReader { geo in
                 Image(uiImage: customBackgroundImage)
                     .resizable()
@@ -133,7 +166,50 @@ struct PadView: View {
             .ignoresSafeArea()
             .overlay(Color.black.opacity(0.35))
         } else {
-            settings.background.color
+            background.color
+        }
+    }
+
+    private func syncStream() {
+        guard settings.background == .screen,
+              scenePhase == .active,
+              connection.status == .connected,
+              let endpoint = connection.streamEndpoint else {
+            screen.stop()
+            return
+        }
+        screen.start(endpoint: endpoint, secret: connection.streamSecret, quality: streamQuality)
+    }
+
+    private var streamIndicator: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(streamColor)
+                .frame(width: 7, height: 7)
+            Text(streamText)
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.85))
+                .lineLimit(1)
+        }
+    }
+
+    private var streamColor: Color {
+        guard connection.streamEndpoint != nil else { return .red }
+        switch screen.state {
+        case .active: return .green
+        case .waiting: return .orange
+        case .unavailable: return .red
+        case .off: return .gray
+        }
+    }
+
+    private var streamText: String {
+        guard connection.streamEndpoint != nil else { return "Écran : le serveur ne le propose pas" }
+        switch screen.state {
+        case .active: return "Écran"
+        case .waiting: return "Écran : en attente"
+        case .unavailable(let reason): return "Écran : \(reason)"
+        case .off: return "Écran : inactif"
         }
     }
 
@@ -149,6 +225,9 @@ struct PadView: View {
                 Text("\(ms) ms")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundColor(latencyColor(ms))
+            }
+            if settings.background == .screen && connection.status == .connected {
+                streamIndicator
             }
         }
         .padding(.horizontal, 10)

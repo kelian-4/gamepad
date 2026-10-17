@@ -73,6 +73,7 @@ enum PadBackground: String, Codable, CaseIterable, Identifiable {
     case forest
     case plum
     case custom
+    case screen
 
     var id: String { rawValue }
 
@@ -84,6 +85,7 @@ enum PadBackground: String, Codable, CaseIterable, Identifiable {
         case .forest: return "Forêt"
         case .plum: return "Prune"
         case .custom: return "Photo"
+        case .screen: return "Écran du PC"
         }
     }
 
@@ -95,6 +97,7 @@ enum PadBackground: String, Codable, CaseIterable, Identifiable {
         case .forest: return Color(red: 0.05, green: 0.12, blue: 0.09)
         case .plum: return Color(red: 0.14, green: 0.06, blue: 0.14)
         case .custom: return .black
+        case .screen: return .black
         }
     }
 }

@@ -10,6 +10,8 @@ struct SettingsView: View {
     let onBackgroundImageChanged: () -> Void
     let onImportLayout: (PadLayout) -> Void
 
+    @AppStorage("gamepad.stream.quality") private var streamQuality = "auto"
+    @AppStorage("gamepad.background.beforeScreen") private var backgroundBeforeScreen = PadBackground.black.rawValue
     @State private var photoItem: PhotosPickerItem?
     @State private var hasCustomImage = CustomBackgroundStorage.exists
     @State private var pendingBackground: PadBackground?
@@ -57,7 +59,7 @@ struct SettingsView: View {
                             pendingBackground = newValue
                         }
                     )) {
-                        ForEach(PadBackground.allCases.filter { $0 != .custom }) { bg in
+                        ForEach(PadBackground.allCases.filter { $0 != .custom && $0 != .screen }) { bg in
                             HStack {
                                 Circle().fill(bg.color).frame(width: 16, height: 16)
                                 Text(bg.title)
@@ -66,6 +68,32 @@ struct SettingsView: View {
                         }
                     }
                     .pickerStyle(.inline)
+
+                    Toggle("Écran du PC", isOn: Binding(
+                        get: { settings.background == .screen },
+                        set: { enabled in
+                            if enabled {
+                                if settings.background != .screen { pendingBackground = .screen }
+                            } else {
+                                let previous = PadBackground(rawValue: backgroundBeforeScreen) ?? .black
+                                settings.background = previous == .screen ? .black : previous
+                            }
+                        }
+                    ))
+
+                    if settings.background == .screen {
+                        Picker("Qualité du flux", selection: $streamQuality) {
+                            Text("Auto").tag("auto")
+                            Text("Haute").tag("high")
+                            Text("Moyenne").tag("medium")
+                            Text("Basse").tag("low")
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    Text("Affiche l'écran du PC derrière les boutons. Lance le serveur avec --stream, puis scanne son QR code.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
 
                     PhotosPicker(selection: $photoItem, matching: .images) {
                         HStack {
@@ -119,6 +147,9 @@ struct SettingsView: View {
             presenting: pendingBackground
         ) { newBackground in
             Button("Appliquer") {
+                if newBackground == .screen {
+                    backgroundBeforeScreen = settings.background.rawValue
+                }
                 settings.background = newBackground
                 pendingBackground = nil
             }
