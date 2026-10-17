@@ -1,7 +1,5 @@
 [32m==>[0m [1mDownloading bottle manifests[0m
 ✔︎ Bottle Manifest xcodegen (2.46.0)
-[34m==>[0m [1mWould install 1 formula:[0m
-xcodegen
 [32m==>[0m [1mFetching downloads for: [32mxcodegen[39m[0m
 ✔︎ Bottle xcodegen (2.46.0)
 [34m==>[0m [1mPouring xcodegen--2.46.0.arm64_tahoe.bottle.1.tar.gz[0m
