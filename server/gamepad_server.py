@@ -288,7 +288,7 @@ async def deadman_watchdog(gamepad: VirtualGamepad, last_seen: dict, stop_event:
     except asyncio.CancelledError:
         pass
 
-async def handler(websocket, pool: GamepadPool, diag: DiagStats):
+async def handler(websocket, pool: GamepadPool, diag: DiagStats, stream_info=None):
     disable_nagle(websocket)
     peer = websocket.remote_address
     log.info("iPhone connecté depuis %s, en attente du handshake", peer)
@@ -319,13 +319,17 @@ async def handler(websocket, pool: GamepadPool, diag: DiagStats):
             return
         slot, gamepad = slot_and_pad
 
-        await websocket.send(json.dumps({
+        ack = {
             "type": "hello_ack",
             "ok": True,
             "protocolVersion": PROTOCOL_VERSION,
             "slot": slot,
             "features": ["deadman", "xbox360_id", "trigger_analog", "thumb_click"],
-        }))
+        }
+        if stream_info is not None:
+            ack["features"].append("screen_stream")
+            ack.update(stream_info)
+        await websocket.send(json.dumps(ack))
         log.info("iPhone %s apparié, manette virtuelle #%d", peer, slot + 1)
 
     except (asyncio.TimeoutError, json.JSONDecodeError, websockets.exceptions.ConnectionClosed):
@@ -411,7 +415,7 @@ async def start_mdns(port: int) -> "AsyncZeroconf | None":
         log.warning("mDNS indisponible: %s: %r", type(exc).__name__, exc, exc_info=True)
         return None
 
-def run_doctor() -> int:
+def run_doctor(check_stream: bool = False) -> int:
     ok = True
     print("== gamepad doctor ==")
 
@@ -454,6 +458,13 @@ def run_doctor() -> int:
     ip = local_ip()
     print(f"[INFO] adresse IP locale détectée : {ip}")
 
+    if check_stream:
+        import screen_stream
+        stream_ok, stream_lines = screen_stream.stream_report()
+        for line in stream_lines:
+            print(line)
+        ok = ok and stream_ok
+
     print("== résultat:", "OK" if ok else "PROBLÈMES DÉTECTÉS", "==")
     return 0 if ok else 1
 
@@ -474,17 +485,38 @@ def render_qr(text: str) -> str:
         lines.append("".join(cells) + "\x1b[0m")
     return "\n".join(lines)
 
-def print_pairing_qr(ip: str, port: int):
+def print_pairing_qr(ip: str, port: int, stream_secret=None):
     url = f"gamepad://{ip}:{port}"
+    if stream_secret:
+        url += f"?s={stream_secret}"
     if not QRCODE_AVAILABLE:
         log.info("QR code d'appairage indisponible (module qrcode absent). Adresse : %s", url)
         return
     if not sys.stdout.isatty():
+        if stream_secret:
+            log.info("Adresse d'appairage du flux d'écran : %s", url)
         return
     print(render_qr(url))
     print(f"Scanne ce QR code depuis l'app ({url})", flush=True)
 
-async def main(host="0.0.0.0", port=8765, max_pads=4, diag_enabled=False):
+async def start_screen_stream(host, stream_port, encoder):
+    import screen_stream
+    stream = screen_stream.ScreenStream(screen_stream.generate_secret(), encoder)
+    problem = stream.availability()
+    if problem:
+        log.warning("Flux d'écran désactivé : %s", problem)
+        return None, None, None
+    server = await stream.start(host, stream_port)
+    info = {
+        "streamPort": stream_port,
+        "streamCodec": "h264",
+        "streamProtocol": screen_stream.STREAM_PROTOCOL_VERSION,
+    }
+    log.info("Flux d'écran activé sur le port %d (scanne le QR code pour l'autoriser)", stream_port)
+    return stream, server, info
+
+async def main(host="0.0.0.0", port=8765, max_pads=4, diag_enabled=False,
+               stream_enabled=False, stream_port=8766, stream_encoder="auto"):
     pool = GamepadPool(max_pads=max_pads)
     problem = uinput_problem()
     if problem:
@@ -492,18 +524,23 @@ async def main(host="0.0.0.0", port=8765, max_pads=4, diag_enabled=False):
     diag = DiagStats()
     diag_task = asyncio.create_task(diag_monitor(diag)) if diag_enabled else None
     aiozc = await start_mdns(port)
+    stream = stream_server = stream_info = None
+    if stream_enabled:
+        stream, stream_server, stream_info = await start_screen_stream(host, stream_port, stream_encoder)
     try:
         async with websockets.serve(
-            lambda ws: handler(ws, pool, diag),
+            lambda ws: handler(ws, pool, diag, stream_info),
             host,
             port,
         ):
             ip = local_ip()
             log.info("Serveur WebSocket sur %s:%d", ip, port)
             log.info("Jusqu'à %d manette(s) virtuelle(s) simultanée(s).", max_pads)
-            print_pairing_qr(ip, port)
+            print_pairing_qr(ip, port, stream.secret if stream else None)
             await asyncio.Future()
     finally:
+        if stream_server is not None:
+            await stream.stop(stream_server)
         if diag_task is not None:
             diag_task.cancel()
         if aiozc is not None:
@@ -515,13 +552,24 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--max-pads", type=int, default=4)
     parser.add_argument("--diag", action="store_true", help="affiche chaque seconde le retard de la boucle et les écarts de ping")
-    parser.add_argument("doctor_cmd", nargs="?", default=None, help="passer 'doctor' pour diagnostiquer l'environnement")
+    parser.add_argument("--stream", action="store_true", help="active le flux de l'écran du PC vers l'app (désactivé par défaut)")
+    parser.add_argument("--stream-port", type=int, default=8766, help="port du flux vidéo")
+    parser.add_argument("--stream-encoder", choices=("auto", "vaapi", "nvenc", "x264"), default="auto", help="encodeur H.264 du flux")
+    parser.add_argument("doctor_cmd", nargs="?", default=None, help="passer 'doctor' pour diagnostiquer l'environnement (avec --stream pour tester aussi la capture d'écran)")
     args = parser.parse_args()
 
     if args.doctor_cmd == "doctor":
-        sys.exit(run_doctor())
+        sys.exit(run_doctor(check_stream=args.stream))
 
     try:
-        asyncio.run(main(host=args.host, port=args.port, max_pads=args.max_pads, diag_enabled=args.diag))
+        asyncio.run(main(
+            host=args.host,
+            port=args.port,
+            max_pads=args.max_pads,
+            diag_enabled=args.diag,
+            stream_enabled=args.stream,
+            stream_port=args.stream_port,
+            stream_encoder=args.stream_encoder,
+        ))
     except KeyboardInterrupt:
         log.info("Arrêt du serveur.")

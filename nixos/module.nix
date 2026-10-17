@@ -29,6 +29,18 @@ in
       default = true;
       description = "Ouvre le port WebSocket et le port mDNS (5353/udp) dans le pare-feu.";
     };
+
+    screenStream = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Installe les outils de capture et d'encodage (wl-screenrec, wf-recorder, ffmpeg) et ouvre le port du flux vidéo. Le flux reste désactivé tant que le serveur n'est pas lancé avec --stream.";
+    };
+
+    streamPort = mkOption {
+      type = types.port;
+      default = 8766;
+      description = "Port TCP du flux vidéo de l'écran (à passer au serveur avec --stream-port si modifié).";
+    };
   };
 
   config = mkIf cfg.enable {
@@ -41,7 +53,7 @@ in
     '';
 
     networking.firewall = mkIf cfg.openFirewall {
-      allowedTCPPorts = [ cfg.port ];
+      allowedTCPPorts = [ cfg.port ] ++ optional cfg.screenStream cfg.streamPort;
       allowedUDPPorts = [ 5353 ];
       extraInputRules = ''
         ip daddr 224.0.0.251 udp dport 5353 accept
@@ -54,6 +66,11 @@ in
       '';
     };
 
-    environment.systemPackages = [ gamepadServerWrapper ];
+    environment.systemPackages = [ gamepadServerWrapper ]
+      ++ optionals cfg.screenStream [
+        pkgs.wl-screenrec
+        pkgs.wf-recorder
+        pkgs.ffmpeg
+      ];
   };
 }
