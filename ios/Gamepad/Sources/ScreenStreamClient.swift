@@ -19,6 +19,7 @@ struct StreamEndpoint: Equatable {
 
 final class ScreenStreamClient: ObservableObject {
     @Published private(set) var state: ScreenStreamState = .off
+    @Published private(set) var framesPerSecond = 0
 
     let displayLayer = AVSampleBufferDisplayLayer()
 
@@ -29,6 +30,8 @@ final class ScreenStreamClient: ObservableObject {
     private var retryWork: DispatchWorkItem?
     private var generation = 0
     private var lastFrameAt: UInt64 = 0
+    private var frameCounter = 0
+    private var needsKeyFrame = true
     private var format: CMVideoFormatDescription?
     private var currentSPS: [UInt8] = []
     private var currentPPS: [UInt8] = []
@@ -69,7 +72,10 @@ final class ScreenStreamClient: ObservableObject {
             self.target = nil
             self.teardown()
             self.setState(.off)
-            DispatchQueue.main.async { self.displayLayer.flushAndRemoveImage() }
+            DispatchQueue.main.async {
+                self.framesPerSecond = 0
+                self.displayLayer.flushAndRemoveImage()
+            }
         }
     }
 
@@ -93,6 +99,8 @@ final class ScreenStreamClient: ObservableObject {
         format = nil
         currentSPS = []
         currentPPS = []
+        needsKeyFrame = true
+        frameCounter = 0
     }
 
     private func openConnection() {
@@ -148,6 +156,11 @@ final class ScreenStreamClient: ObservableObject {
     private func scheduleWatchdog(token: Int) {
         queue.asyncAfter(deadline: .now() + Self.watchdogInterval) { [weak self] in
             guard let self, self.generation == token, self.connection != nil else { return }
+            let rate = self.frameCounter
+            self.frameCounter = 0
+            DispatchQueue.main.async { [weak self] in
+                if self?.framesPerSecond != rate { self?.framesPerSecond = rate }
+            }
             if self.currentState == .active {
                 let now = DispatchTime.now().uptimeNanoseconds
                 if now > self.lastFrameAt + Self.stallSeconds * 1_000_000_000 {
@@ -234,12 +247,18 @@ final class ScreenStreamClient: ObservableObject {
         }
         guard let format, offset < bytes.count else { return }
         let isKey = flags & 0x01 != 0
+        if isKey { needsKeyFrame = false }
+        if needsKeyFrame { return }
         guard let sample = Self.makeSampleBuffer(payload: Array(bytes[offset...]), format: format, isKey: isKey) else { return }
         if displayLayer.status == .failed {
             displayLayer.flush()
         }
-        guard displayLayer.isReadyForMoreMediaData else { return }
+        guard displayLayer.isReadyForMoreMediaData else {
+            needsKeyFrame = true
+            return
+        }
         displayLayer.enqueue(sample)
+        frameCounter += 1
         lastFrameAt = DispatchTime.now().uptimeNanoseconds
         setState(.active)
     }

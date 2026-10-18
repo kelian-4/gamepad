@@ -717,6 +717,7 @@ class ScreenStream:
 
     async def supervise(self):
         loop = asyncio.get_running_loop()
+        self.stats.update(frames=0, bytes=0, gap=0.0, last=None, drops=0)
         adapt = asyncio.create_task(self.adapt_loop())
         try:
             try:

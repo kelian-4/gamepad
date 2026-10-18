@@ -209,7 +209,7 @@ struct PadView: View {
     private var streamText: String {
         guard connection.streamEndpoint != nil else { return "Écran : le serveur ne le propose pas" }
         switch screen.state {
-        case .active: return "Écran"
+        case .active: return "Écran \(screen.framesPerSecond) img/s"
         case .waiting: return "Écran : en attente"
         case .unavailable(let reason): return "Écran : \(reason)"
         case .off: return "Écran : inactif"
