@@ -499,9 +499,9 @@ def print_pairing_qr(ip: str, port: int, stream_secret=None):
     print(render_qr(url))
     print(f"Scanne ce QR code depuis l'app ({url})", flush=True)
 
-async def start_screen_stream(host, stream_port, encoder):
+async def start_screen_stream(host, stream_port, encoder, diagnostics=False):
     import screen_stream
-    stream = screen_stream.ScreenStream(screen_stream.generate_secret(), encoder)
+    stream = screen_stream.ScreenStream(screen_stream.generate_secret(), encoder, diagnostics)
     problem = stream.availability()
     if problem:
         log.warning("Flux d'écran désactivé : %s", problem)
@@ -526,7 +526,7 @@ async def main(host="0.0.0.0", port=8765, max_pads=4, diag_enabled=False,
     aiozc = await start_mdns(port)
     stream = stream_server = stream_info = None
     if stream_enabled:
-        stream, stream_server, stream_info = await start_screen_stream(host, stream_port, stream_encoder)
+        stream, stream_server, stream_info = await start_screen_stream(host, stream_port, stream_encoder, diag_enabled)
     try:
         async with websockets.serve(
             lambda ws: handler(ws, pool, diag, stream_info),

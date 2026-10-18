@@ -53,7 +53,7 @@ Le fond de la manette peut afficher l'écran du PC en direct. La fonction est d�
 sudo gamepad-server server/gamepad_server.py --stream
 ```
 
-Options : `--stream-port` (8766 par défaut), `--stream-encoder auto|vaapi|nvenc|x264`. Le diagnostic `gamepad-server server/gamepad_server.py doctor --stream` liste les outils trouvés, la session graphique et les chaînes de capture possibles.
+Options : `--stream-port` (8766 par défaut), `--stream-encoder auto|vaapi|nvenc|x264`. Avec `--diag`, une ligne toutes les 5 s indique les images par seconde, le débit, l'écart maximal entre deux images, les abandons, le niveau de qualité et la chaîne de capture utilisée. Le diagnostic `gamepad-server server/gamepad_server.py doctor --stream` liste les outils trouvés, la session graphique et les chaînes de capture possibles.
 
 ### Architecture
 
@@ -95,7 +95,7 @@ Sur le port du flux, l'app ouvre un WebSocket et envoie en texte :
 
 - Chaque appareil a une file de 2 images. Si le réseau ne suit pas, la file est vidée et les images suivantes sont ignorées jusqu'à la prochaine image clé (une par seconde environ) : on jette des images, on n'en met jamais en attente. Un client qui n'absorbe plus rien pendant 2 s est déconnecté du canal vidéo.
 - Le tampon d'envoi de la socket vidéo est réduit à 128 Ko pour que les retards remontent vite.
-- L'image est affichée dès son arrivée (`DisplayImmediately`) et décodée par le matériel via `AVSampleBufferDisplayLayer`. Le découpage du flux H.264 attend le début de l'image suivante pour fermer l'image courante, soit environ une image de retard.
+- L'image est affichée dès son arrivée (`DisplayImmediately`) et décodée par le matériel via `AVSampleBufferDisplayLayer`. Le flux H.264 n'indique pas où une image se termine : le serveur la ferme au début de la suivante, ou après 6 ms sans nouvelle donnée de la capture. Sans ce second cas, une capture qui n'encode que quand l'écran change (`wl-screenrec`) retenait chaque image jusqu'au changement suivant.
 
 ### Qualité
 

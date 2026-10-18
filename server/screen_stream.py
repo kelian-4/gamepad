@@ -33,6 +33,8 @@ ADAPT_DROP_WINDOW = 6.0
 ADAPT_DROPS_TO_DEGRADE = 2
 ADAPT_MIN_STEP_INTERVAL = 6.0
 ADAPT_CLEAN_TIME_TO_RECOVER = 45.0
+IDLE_FLUSH_SECONDS = 0.006
+DIAG_INTERVAL_TICKS = 5
 
 QUALITY_LEVELS = (
     {"name": "high", "height": 720, "fps": 30, "kbps": 5000},
@@ -351,6 +353,14 @@ class AnnexBSplitter:
         del self.buffer[:starts[-1]]
         return nals
 
+    def take_open(self) -> Optional[bytes]:
+        if not self.buffer.startswith(b"\x00\x00\x01"):
+            self.buffer.clear()
+            return None
+        nal = bytes(self.buffer[3:]).rstrip(b"\x00")
+        self.buffer.clear()
+        return nal or None
+
 
 class FrameAssembler:
     def __init__(self):
@@ -513,9 +523,12 @@ def stream_report(preference: str = "auto") -> tuple:
 
 
 class ScreenStream:
-    def __init__(self, secret: str, encoder: str = "auto"):
+    def __init__(self, secret: str, encoder: str = "auto", diagnostics: bool = False):
         self.secret = secret
         self.encoder = encoder
+        self.diagnostics = diagnostics
+        self.pipeline_label = ""
+        self.stats = {"frames": 0, "bytes": 0, "gap": 0.0, "last": None, "drops": 0}
         self.clients = set()
         self.state = "idle"
         self.reason = None
@@ -572,10 +585,19 @@ class ScreenStream:
         if self.state != "active":
             self.set_state("active")
         payload = encode_frame(frame)
+        now = asyncio.get_running_loop().time()
+        if self.diagnostics:
+            if self.stats["last"] is not None:
+                self.stats["gap"] = max(self.stats["gap"], now - self.stats["last"])
+            self.stats["last"] = now
+            self.stats["frames"] += 1
+            self.stats["bytes"] += len(payload)
         for client in list(self.clients):
             dropped = client.offer(payload, frame.key)
+            if dropped:
+                self.stats["drops"] += 1
             if dropped and client.fixed is None:
-                self.drops.append(asyncio.get_running_loop().time())
+                self.drops.append(now)
 
     def on_clients_changed(self):
         if not self.clients:
@@ -655,10 +677,27 @@ class ScreenStream:
         except websockets.exceptions.ConnectionClosed:
             pass
 
+    def log_stats(self, seconds: float):
+        stats = self.stats
+        log.info(
+            "diag flux : %.0f img/s | %.0f kbit/s | écart max entre images %.0f ms | %d abandon(s) | niveau %s | capture %s",
+            stats["frames"] / seconds,
+            stats["bytes"] * 8 / 1000 / seconds,
+            stats["gap"] * 1000,
+            stats["drops"],
+            QUALITY_LEVELS[self.running_index]["name"],
+            self.pipeline_label,
+        )
+        stats.update(frames=0, bytes=0, gap=0.0, drops=0)
+
     async def adapt_loop(self):
         loop = asyncio.get_running_loop()
+        ticks = 0
         while True:
             await asyncio.sleep(ADAPT_INTERVAL)
+            ticks += 1
+            if self.diagnostics and ticks % DIAG_INTERVAL_TICKS == 0 and self.clients:
+                self.log_stats(DIAG_INTERVAL_TICKS * ADAPT_INTERVAL)
             now = loop.time()
             while self.drops and now - self.drops[0] > ADAPT_DROP_WINDOW:
                 self.drops.popleft()
@@ -696,6 +735,7 @@ class ScreenStream:
                 self.restart.clear()
                 self.set_state("waiting")
                 tool, encoder = pipelines[position]
+                self.pipeline_label = f"{tool}/{encoder}"
                 log.info("Flux d'écran : capture %s/%s, qualité %s", tool, encoder, QUALITY_LEVELS[self.running_index]["name"])
                 started = loop.time()
                 outcome, detail = await self.run_capture(session, screen, tool, encoder, QUALITY_LEVELS[self.running_index])
@@ -753,7 +793,15 @@ class ScreenStream:
                 splitter = AnnexBSplitter()
                 assembler = FrameAssembler()
                 while True:
-                    data = await source.read(65536)
+                    try:
+                        data = await asyncio.wait_for(source.read(65536), IDLE_FLUSH_SECONDS if splitter.buffer else None)
+                    except asyncio.TimeoutError:
+                        last = splitter.take_open()
+                        frames = assembler.push(last) if last else []
+                        frames += assembler.flush()
+                        for frame in frames:
+                            self.on_frame(frame)
+                        continue
                     if not data:
                         return
                     for nal in splitter.feed(data):
