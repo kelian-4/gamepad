@@ -6,6 +6,8 @@ struct PadView: View {
     @ObservedObject private var screen: ScreenStreamClient
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("gamepad.stream.quality") private var streamQuality = "auto"
+    @AppStorage("gamepad.stream.brightness") private var streamBrightness = 0.8
+    @AppStorage("gamepad.buttons.opacity") private var buttonOpacity = 1.0
     @AppStorage("gamepad.background.beforeScreen") private var backgroundBeforeScreen = PadBackground.black.rawValue
     @State private var layout = PadLayout.load()
     @State private var settings = PadSettings.load()
@@ -32,6 +34,7 @@ struct PadView: View {
                     PadSurface(layout: layout, settings: settings, editing: editing, delegate: bridge) { view in
                         surface = view
                     }
+                    .opacity(editing ? 1 : buttonOpacity)
                     .ignoresSafeArea()
                 }
 
@@ -144,7 +147,7 @@ struct PadView: View {
                 if screen.state == .active {
                     ScreenStreamView(displayLayer: screen.displayLayer)
                         .allowsHitTesting(false)
-                        .overlay(Color.black.opacity(0.2))
+                        .overlay(Color.black.opacity(1 - streamBrightness))
                 }
             }
             .ignoresSafeArea()

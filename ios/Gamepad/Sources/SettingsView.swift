@@ -11,6 +11,8 @@ struct SettingsView: View {
     let onImportLayout: (PadLayout) -> Void
 
     @AppStorage("gamepad.stream.quality") private var streamQuality = "auto"
+    @AppStorage("gamepad.stream.brightness") private var streamBrightness = 0.8
+    @AppStorage("gamepad.buttons.opacity") private var buttonOpacity = 1.0
     @AppStorage("gamepad.background.beforeScreen") private var backgroundBeforeScreen = PadBackground.black.rawValue
     @State private var photoItem: PhotosPickerItem?
     @State private var hasCustomImage = CustomBackgroundStorage.exists
@@ -43,6 +45,18 @@ struct SettingsView: View {
                         Image(systemName: "circle.fill")
                     }
                     Text("\(Int(settings.globalScale * 100)) %")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Section("Visibilité des boutons") {
+                    HStack {
+                        Image(systemName: "eye.slash")
+                            .font(.caption)
+                        Slider(value: $buttonOpacity, in: 0.15...1.0, step: 0.05)
+                        Image(systemName: "eye")
+                    }
+                    Text("\(Int(buttonOpacity * 100)) %")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -89,6 +103,16 @@ struct SettingsView: View {
                             Text("Basse").tag("low")
                         }
                         .pickerStyle(.segmented)
+
+                        HStack {
+                            Image(systemName: "sun.min")
+                                .font(.caption)
+                            Slider(value: $streamBrightness, in: 0.2...1.0, step: 0.05)
+                            Image(systemName: "sun.max")
+                        }
+                        Text("Luminosité du fond : \(Int(streamBrightness * 100)) %")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
 
                     Text("Affiche l'écran du PC derrière les boutons. Lance le serveur avec --stream, puis scanne son QR code.")
