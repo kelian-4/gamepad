@@ -38,7 +38,7 @@ final class ScreenStreamClient: ObservableObject {
     private static let watchdogInterval: Double = 1
 
     init() {
-        displayLayer.videoGravity = .resizeAspectFill
+        displayLayer.videoGravity = .resize
         displayLayer.backgroundColor = UIColor.black.cgColor
     }
 
