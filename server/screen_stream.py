@@ -27,6 +27,7 @@ DEFAULT_STREAM_PORT = 8766
 MAX_STREAM_CLIENTS = 2
 HANDSHAKE_TIMEOUT = 5.0
 SEND_TIMEOUT = 2.0
+SLOW_SEND_SECONDS = 0.25
 CLIENT_QUEUE_SIZE = 2
 SOCKET_SEND_BUFFER = 16384
 WRITE_BUFFER_HIGH = 8192
@@ -305,7 +306,7 @@ def build_command(tool: str, encoder: str, level: dict, screen: Optional[Screen]
         argv = ["wf-recorder", "-y", "-m", "h264", "-f", fifo, "-r", str(fps)]
         if screen:
             argv += ["-o", screen.name]
-        argv += ["-p", f"b={kbps}k", "-p", f"g={fps}", "-p", "bf=0"]
+        argv += ["-p", f"b={kbps}k", "-p", f"maxrate={kbps}k", "-p", f"bufsize={kbps // 2}k", "-p", f"g={fps}", "-p", "bf=0"]
         if encoder == "vaapi":
             vaapi_scale = f"w={size[0]}:h={size[1]}" if size else f"w=-2:h={level['height']}"
             argv += ["-c", "h264_vaapi", "-d", RENDER_NODE, "-F", f"scale_vaapi={vaapi_scale}:format=nv12:out_range=full"]
@@ -326,7 +327,7 @@ def build_command(tool: str, encoder: str, level: dict, screen: Optional[Screen]
         argv += ["-vf", base_filter, "-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ll", "-zerolatency", "1"]
     else:
         argv += ["-vf", f"{base_filter},format=yuv420p", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-threads", "2"]
-    argv += ["-b:v", f"{kbps}k", "-g", str(fps), "-bf", "0", "-f", "h264", "pipe:1"]
+    argv += ["-b:v", f"{kbps}k", "-maxrate", f"{kbps}k", "-bufsize", f"{kbps // 2}k", "-g", str(fps), "-bf", "0", "-f", "h264", "pipe:1"]
     return argv
 
 
@@ -689,8 +690,11 @@ class ScreenStream:
                 item = await client.queue.get()
                 started = time.perf_counter()
                 await asyncio.wait_for(client.websocket.send(item), SEND_TIMEOUT)
+                elapsed = time.perf_counter() - started
+                if elapsed > SLOW_SEND_SECONDS and client.fixed is None:
+                    self.drops.append(asyncio.get_running_loop().time())
                 if self.diagnostics:
-                    self.stats["send"] = max(self.stats["send"], time.perf_counter() - started)
+                    self.stats["send"] = max(self.stats["send"], elapsed)
         except asyncio.TimeoutError:
             log.warning("Flux d'écran : client trop lent, connexion vidéo fermée")
             await client.websocket.close()
