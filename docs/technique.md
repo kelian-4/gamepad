@@ -94,7 +94,7 @@ Sur le port du flux, l'app ouvre un WebSocket et envoie en texte :
 ### Latence et réseau
 
 - Chaque appareil a une file de 2 images. Si le réseau ne suit pas, la file est vidée et les images suivantes sont ignorées jusqu'à la prochaine image clé (une par seconde environ) : on jette des images, on n'en met jamais en attente. Un client qui n'absorbe plus rien pendant 2 s est déconnecté du canal vidéo.
-- Le tampon d'envoi de la socket vidéo est réduit à 128 Ko pour que les retards remontent vite.
+- Les tampons d'envoi de la socket vidéo sont réduits (16 Ko côté système, 8 Ko côté programme) : tout octet en attente dans un tampon est du retard que l'abandon d'images ne voit pas. Avec `--diag`, la ligne `diag flux` indique la file d'envoi maximale (octets non partis, programme et système) et la durée d'envoi maximale d'une image.
 - L'image est affichée dès son arrivée (`DisplayImmediately`) et décodée par le matériel via `AVSampleBufferDisplayLayer`. Le flux H.264 n'indique pas où une image se termine : le serveur la ferme au début de la suivante, ou après 6 ms sans nouvelle donnée de la capture. Sans ce second cas, une capture qui n'encode que quand l'écran change (`wl-screenrec`) retenait chaque image jusqu'au changement suivant.
 
 ### Qualité

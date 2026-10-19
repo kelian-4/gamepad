@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import fcntl
 import hmac
 import json
 import logging
@@ -12,6 +13,8 @@ import socket
 import stat
 import struct
 import tempfile
+import termios
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -25,7 +28,9 @@ MAX_STREAM_CLIENTS = 2
 HANDSHAKE_TIMEOUT = 5.0
 SEND_TIMEOUT = 2.0
 CLIENT_QUEUE_SIZE = 2
-SOCKET_SEND_BUFFER = 131072
+SOCKET_SEND_BUFFER = 16384
+WRITE_BUFFER_HIGH = 8192
+WRITE_BUFFER_LOW = 2048
 RENDER_NODE = "/dev/dri/renderD128"
 MIN_HEALTHY_RUN = 10.0
 ADAPT_INTERVAL = 1.0
@@ -449,8 +454,20 @@ def tune_socket(websocket):
         if sock is not None:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_SEND_BUFFER)
+        websocket.transport.set_write_buffer_limits(high=WRITE_BUFFER_HIGH, low=WRITE_BUFFER_LOW)
     except Exception as exc:
         log.warning("Réglage de la socket vidéo non appliqué: %s", exc)
+
+
+def send_backlog(websocket) -> int:
+    transport = websocket.transport
+    pending = transport.get_write_buffer_size()
+    try:
+        sock = transport.get_extra_info("socket")
+        pending += struct.unpack("i", fcntl.ioctl(sock.fileno(), termios.TIOCOUTQ, b"\0\0\0\0"))[0]
+    except (OSError, AttributeError, ValueError):
+        pass
+    return pending
 
 
 def lower_priority(pid: int):
@@ -528,7 +545,7 @@ class ScreenStream:
         self.encoder = encoder
         self.diagnostics = diagnostics
         self.pipeline_label = ""
-        self.stats = {"frames": 0, "bytes": 0, "gap": 0.0, "last": None, "drops": 0}
+        self.stats = {"frames": 0, "bytes": 0, "gap": 0.0, "last": None, "drops": 0, "backlog": 0, "send": 0.0}
         self.clients = set()
         self.state = "idle"
         self.reason = None
@@ -670,7 +687,10 @@ class ScreenStream:
         try:
             while True:
                 item = await client.queue.get()
+                started = time.perf_counter()
                 await asyncio.wait_for(client.websocket.send(item), SEND_TIMEOUT)
+                if self.diagnostics:
+                    self.stats["send"] = max(self.stats["send"], time.perf_counter() - started)
         except asyncio.TimeoutError:
             log.warning("Flux d'écran : client trop lent, connexion vidéo fermée")
             await client.websocket.close()
@@ -680,15 +700,17 @@ class ScreenStream:
     def log_stats(self, seconds: float):
         stats = self.stats
         log.info(
-            "diag flux : %.0f img/s | %.0f kbit/s | écart max entre images %.0f ms | %d abandon(s) | niveau %s | capture %s",
+            "diag flux : %.0f img/s | %.0f kbit/s | écart max entre images %.0f ms | %d abandon(s) | file d'envoi max %.0f Ko | envoi max %.0f ms | niveau %s | capture %s",
             stats["frames"] / seconds,
             stats["bytes"] * 8 / 1000 / seconds,
             stats["gap"] * 1000,
             stats["drops"],
+            stats["backlog"] / 1024,
+            stats["send"] * 1000,
             QUALITY_LEVELS[self.running_index]["name"],
             self.pipeline_label,
         )
-        stats.update(frames=0, bytes=0, gap=0.0, drops=0)
+        stats.update(frames=0, bytes=0, gap=0.0, drops=0, backlog=0, send=0.0)
 
     async def adapt_loop(self):
         loop = asyncio.get_running_loop()
@@ -696,8 +718,11 @@ class ScreenStream:
         while True:
             await asyncio.sleep(ADAPT_INTERVAL)
             ticks += 1
-            if self.diagnostics and ticks % DIAG_INTERVAL_TICKS == 0 and self.clients:
-                self.log_stats(DIAG_INTERVAL_TICKS * ADAPT_INTERVAL)
+            if self.diagnostics:
+                for client in list(self.clients):
+                    self.stats["backlog"] = max(self.stats["backlog"], send_backlog(client.websocket))
+                if ticks % DIAG_INTERVAL_TICKS == 0 and self.clients:
+                    self.log_stats(DIAG_INTERVAL_TICKS * ADAPT_INTERVAL)
             now = loop.time()
             while self.drops and now - self.drops[0] > ADAPT_DROP_WINDOW:
                 self.drops.popleft()
@@ -717,7 +742,7 @@ class ScreenStream:
 
     async def supervise(self):
         loop = asyncio.get_running_loop()
-        self.stats.update(frames=0, bytes=0, gap=0.0, last=None, drops=0)
+        self.stats.update(frames=0, bytes=0, gap=0.0, last=None, drops=0, backlog=0, send=0.0)
         adapt = asyncio.create_task(self.adapt_loop())
         try:
             try:
