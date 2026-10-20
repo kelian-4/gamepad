@@ -18,6 +18,7 @@ struct PadView: View {
     @State private var selectedScale: Double?
     @State private var customBackgroundImage: UIImage? = CustomBackgroundStorage.load()
     @State private var pendingPresetLayoutChange: PadPreset?
+    private let streamWatchdog = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     init(connection: GamepadConnection) {
         _connection = ObservedObject(wrappedValue: connection)
@@ -79,6 +80,7 @@ struct PadView: View {
         .onChange(of: connection.streamEndpoint) { _ in syncStream() }
         .onChange(of: streamQuality) { _ in syncStream() }
         .onChange(of: scenePhase) { _ in syncStream() }
+        .onReceive(streamWatchdog) { _ in reviveStreamIfStopped() }
         .sheet(isPresented: $showSettings) {
             SettingsView(
                 settings: $settings,
@@ -173,15 +175,24 @@ struct PadView: View {
         }
     }
 
-    private func syncStream() {
+    private var wantedStreamEndpoint: StreamEndpoint? {
         guard settings.background == .screen,
-              scenePhase == .active,
-              connection.status == .connected,
-              let endpoint = connection.streamEndpoint else {
+              scenePhase != .background,
+              connection.status == .connected else { return nil }
+        return connection.streamEndpoint
+    }
+
+    private func syncStream() {
+        guard let endpoint = wantedStreamEndpoint else {
             screen.stop()
             return
         }
         screen.start(endpoint: endpoint, secret: connection.streamSecret, quality: streamQuality)
+    }
+
+    private func reviveStreamIfStopped() {
+        guard screen.state == .off, wantedStreamEndpoint != nil else { return }
+        syncStream()
     }
 
     private var streamIndicator: some View {
