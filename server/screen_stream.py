@@ -293,6 +293,7 @@ def build_command(tool: str, encoder: str, level: dict, screen: Optional[Screen]
             "--codec", "avc",
             "--gop-size", str(fps),
             "--max-fps", str(fps),
+            "--ffmpeg-encoder-options", "bf=0",
             "-b", f"{kbps // 8}KB",
             "--ffmpeg-muxer", "h264",
             "-f", fifo,
