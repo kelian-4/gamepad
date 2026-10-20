@@ -28,6 +28,7 @@ MAX_STREAM_CLIENTS = 2
 HANDSHAKE_TIMEOUT = 5.0
 SEND_TIMEOUT = 2.0
 SLOW_SEND_SECONDS = 0.25
+SOFTWARE_MAX_FPS = 30
 CLIENT_QUEUE_SIZE = 2
 SOCKET_SEND_BUFFER = 16384
 WRITE_BUFFER_HIGH = 8192
@@ -43,7 +44,7 @@ IDLE_FLUSH_SECONDS = 0.006
 DIAG_INTERVAL_TICKS = 5
 
 QUALITY_LEVELS = (
-    {"name": "high", "height": 720, "fps": 30, "kbps": 5000},
+    {"name": "high", "height": 720, "fps": 60, "kbps": 6000},
     {"name": "medium", "height": 540, "fps": 30, "kbps": 3000},
     {"name": "low", "height": 360, "fps": 24, "kbps": 1200},
 )
@@ -284,7 +285,7 @@ def scale_filter(level: dict, size: Optional[tuple]) -> str:
 
 
 def build_command(tool: str, encoder: str, level: dict, screen: Optional[Screen], session: Session, fifo: Optional[str]) -> list:
-    fps = level["fps"]
+    fps = level["fps"] if tool == "wl-screenrec" else min(level["fps"], SOFTWARE_MAX_FPS)
     kbps = level["kbps"]
     size = target_size(level, screen)
     if tool == "wl-screenrec":

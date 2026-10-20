@@ -101,7 +101,7 @@ Sur le port du flux, l'app ouvre un WebSocket et envoie en texte :
 
 | Niveau | Hauteur | Images/s | Débit visé |
 |---|---|---|---|
-| `high` | 720 | 30 | 5 Mbit/s |
+| `high` | 720 | 60 | 6 Mbit/s |
 | `medium` | 540 | 30 | 3 Mbit/s |
 | `low` | 360 | 24 | 1,2 Mbit/s |
 
