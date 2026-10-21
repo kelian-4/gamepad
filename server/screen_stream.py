@@ -573,12 +573,14 @@ class ScreenStream:
 
     async def stop(self, server):
         server.close()
-        for client in list(self.clients):
-            await client.websocket.close()
-        await server.wait_closed()
         if self.supervisor is not None:
             self.supervisor.cancel()
             await asyncio.gather(self.supervisor, return_exceptions=True)
+        await asyncio.gather(
+            *(asyncio.wait_for(client.websocket.close(), 1.0) for client in list(self.clients)),
+            return_exceptions=True,
+        )
+        await server.wait_closed()
 
     def desired_index(self) -> int:
         indexes = [client.fixed if client.fixed is not None else self.auto_index for client in self.clients]
