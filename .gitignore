@@ -5,3 +5,4 @@ ios/build/
 xcuserdata/
 __pycache__/
 *.pyc
+gamepad-diag.log

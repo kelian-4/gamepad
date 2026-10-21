@@ -33,6 +33,19 @@ PROTOCOL_VERSION = 1
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("gamepad")
+diag_log = logging.getLogger("gamepad.diag")
+
+def route_diagnostics_to_file(path):
+    path = os.path.abspath(path)
+    handler = logging.FileHandler(path, mode="w", encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    diag_log.addHandler(handler)
+    diag_log.propagate = False
+    try:
+        os.chown(path, int(os.environ["SUDO_UID"]), int(os.environ.get("SUDO_GID", os.environ["SUDO_UID"])))
+    except (KeyError, ValueError, OSError):
+        pass
+    return path
 
 class ProbeDisconnectFilter(logging.Filter):
     def filter(self, record):
@@ -259,7 +272,7 @@ async def diag_monitor(diag: DiagStats):
         lag_count += 1
         if now >= report_at:
             if diag.messages:
-                log.info(
+                diag_log.info(
                     "diag: retard boucle moy %.2f max %.2f ms | %d msg | écart max entre pings %.0f ms | montée relative moy %.1f max %.1f ms | traitement max %.2f ms | écho max %.2f ms",
                     lag_sum / lag_count * 1000,
                     lag_max * 1000,
@@ -551,7 +564,8 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--max-pads", type=int, default=4)
-    parser.add_argument("--diag", action="store_true", help="affiche chaque seconde le retard de la boucle et les écarts de ping")
+    parser.add_argument("--diag", action="store_true", help="écrit chaque seconde le retard de la boucle et les écarts de ping dans un fichier")
+    parser.add_argument("--diag-file", default="gamepad-diag.log", help="fichier des diagnostics de --diag (réécrit à chaque lancement)")
     parser.add_argument("--stream", action="store_true", help="active le flux de l'écran du PC vers l'app (désactivé par défaut)")
     parser.add_argument("--stream-port", type=int, default=8766, help="port du flux vidéo")
     parser.add_argument("--stream-encoder", choices=("auto", "vaapi", "nvenc", "x264"), default="auto", help="encodeur H.264 du flux")
@@ -560,6 +574,9 @@ if __name__ == "__main__":
 
     if args.doctor_cmd == "doctor":
         sys.exit(run_doctor(check_stream=args.stream))
+
+    if args.diag:
+        log.info("Diagnostics écrits dans %s", route_diagnostics_to_file(args.diag_file))
 
     try:
         asyncio.run(main(

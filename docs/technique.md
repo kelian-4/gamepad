@@ -25,7 +25,7 @@ Il vérifie `/dev/uinput`, les permissions, la disponibilité de `zeroconf` et a
 
 ### Diagnostic de latence (`--diag`)
 
-Avec `--diag`, le serveur affiche chaque seconde où des messages arrivent une ligne :
+Avec `--diag`, le serveur écrit dans `gamepad-diag.log` (dossier courant, réécrit à chaque lancement, autre chemin avec `--diag-file`) chaque seconde où des messages arrivent une ligne :
 
 ```
 diag: retard boucle moy 0.63 max 11.72 ms | 62 msg | écart max entre pings 151 ms | montée relative moy 0.4 max 2.1 ms | traitement max 0.03 ms | écho max 0.05 ms

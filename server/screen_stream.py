@@ -21,6 +21,7 @@ from typing import Optional
 import websockets
 
 log = logging.getLogger("gamepad.stream")
+diag_log = logging.getLogger("gamepad.diag")
 
 STREAM_PROTOCOL_VERSION = 1
 DEFAULT_STREAM_PORT = 8766
@@ -706,7 +707,7 @@ class ScreenStream:
 
     def log_stats(self, seconds: float):
         stats = self.stats
-        log.info(
+        diag_log.info(
             "diag flux : %.0f img/s | %.0f kbit/s | écart max entre images %.0f ms | %d abandon(s) | file d'envoi max %.0f Ko | envoi max %.0f ms | niveau %s | capture %s",
             stats["frames"] / seconds,
             stats["bytes"] * 8 / 1000 / seconds,
