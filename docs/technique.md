@@ -53,7 +53,7 @@ Le fond de la manette peut afficher l'écran du PC en direct. La fonction est d�
 sudo gamepad-server server/gamepad_server.py --stream
 ```
 
-Options : `--stream-port` (8766 par défaut), `--stream-encoder auto|vaapi|nvenc|x264`. Avec `--diag`, une ligne toutes les 5 s indique les images par seconde, le débit, l'écart maximal entre deux images, les abandons, le niveau de qualité et la chaîne de capture utilisée. Le diagnostic `gamepad-server server/gamepad_server.py doctor --stream` liste les outils trouvés, la session graphique et les chaînes de capture possibles.
+Options : `--stream-port` (8766 par défaut), `--stream-encoder auto|vaapi|nvenc|x264`. Avec `--diag`, une ligne toutes les 5 s indique les images par seconde, le débit, l'écart maximal entre deux images, les abandons, le niveau de qualité, la chaîne de capture utilisée et le nombre d'images B. À chaque démarrage de capture, une ligne décrit aussi le flux H.264 produit (profil, type de POC, codage CABAC ou CAVLC, images de référence). Le diagnostic `gamepad-server server/gamepad_server.py doctor --stream` liste les outils trouvés, la session graphique et les chaînes de capture possibles.
 
 ### Architecture
 

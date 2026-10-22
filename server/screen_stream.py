@@ -20,6 +20,8 @@ from typing import Optional
 
 import websockets
 
+import h264_info
+
 log = logging.getLogger("gamepad.stream")
 diag_log = logging.getLogger("gamepad.diag")
 
@@ -550,7 +552,8 @@ class ScreenStream:
         self.encoder = encoder
         self.diagnostics = diagnostics
         self.pipeline_label = ""
-        self.stats = {"frames": 0, "bytes": 0, "gap": 0.0, "last": None, "drops": 0, "backlog": 0, "send": 0.0}
+        self.stats = {"frames": 0, "bytes": 0, "gap": 0.0, "last": None, "drops": 0, "backlog": 0, "send": 0.0, "b": 0}
+        self.described = None
         self.clients = set()
         self.state = "idle"
         self.reason = None
@@ -616,6 +619,11 @@ class ScreenStream:
             self.stats["last"] = now
             self.stats["frames"] += 1
             self.stats["bytes"] += len(payload)
+            if h264_info.slice_kind(frame.nals[0]) == "B":
+                self.stats["b"] += 1
+            if frame.key and (frame.sps, frame.pps) != self.described:
+                self.described = (frame.sps, frame.pps)
+                diag_log.info("diag flux : %s", h264_info.describe(frame.sps, frame.pps))
         for client in list(self.clients):
             dropped = client.offer(payload, frame.key)
             if dropped:
@@ -710,7 +718,7 @@ class ScreenStream:
     def log_stats(self, seconds: float):
         stats = self.stats
         diag_log.info(
-            "diag flux : %.0f img/s | %.0f kbit/s | écart max entre images %.0f ms | %d abandon(s) | file d'envoi max %.0f Ko | envoi max %.0f ms | niveau %s | capture %s",
+            "diag flux : %.0f img/s | %.0f kbit/s | écart max entre images %.0f ms | %d abandon(s) | file d'envoi max %.0f Ko | envoi max %.0f ms | niveau %s | capture %s | images B %d",
             stats["frames"] / seconds,
             stats["bytes"] * 8 / 1000 / seconds,
             stats["gap"] * 1000,
@@ -719,8 +727,9 @@ class ScreenStream:
             stats["send"] * 1000,
             QUALITY_LEVELS[self.running_index]["name"],
             self.pipeline_label,
+            stats["b"],
         )
-        stats.update(frames=0, bytes=0, gap=0.0, drops=0, backlog=0, send=0.0)
+        stats.update(frames=0, bytes=0, gap=0.0, drops=0, backlog=0, send=0.0, b=0)
 
     async def adapt_loop(self):
         loop = asyncio.get_running_loop()
@@ -752,7 +761,8 @@ class ScreenStream:
 
     async def supervise(self):
         loop = asyncio.get_running_loop()
-        self.stats.update(frames=0, bytes=0, gap=0.0, last=None, drops=0, backlog=0, send=0.0)
+        self.stats.update(frames=0, bytes=0, gap=0.0, last=None, drops=0, backlog=0, send=0.0, b=0)
+        self.described = None
         adapt = asyncio.create_task(self.adapt_loop())
         try:
             try:
