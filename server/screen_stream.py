@@ -21,6 +21,7 @@ from typing import Optional
 import websockets
 
 import h264_info
+from h264_repeat import FrameRepeater
 
 log = logging.getLogger("gamepad.stream")
 diag_log = logging.getLogger("gamepad.diag")
@@ -44,6 +45,7 @@ ADAPT_DROPS_TO_DEGRADE = 2
 ADAPT_MIN_STEP_INTERVAL = 6.0
 ADAPT_CLEAN_TIME_TO_RECOVER = 45.0
 IDLE_FLUSH_SECONDS = 0.006
+REPEAT_INTERVAL_SECONDS = 0.028
 DIAG_INTERVAL_TICKS = 5
 
 QUALITY_LEVELS = (
@@ -552,7 +554,7 @@ class ScreenStream:
         self.encoder = encoder
         self.diagnostics = diagnostics
         self.pipeline_label = ""
-        self.stats = {"frames": 0, "bytes": 0, "gap": 0.0, "last": None, "drops": 0, "backlog": 0, "send": 0.0, "b": 0}
+        self.stats = {"frames": 0, "bytes": 0, "gap": 0.0, "last": None, "drops": 0, "backlog": 0, "send": 0.0, "b": 0, "r": 0}
         self.described = None
         self.clients = set()
         self.state = "idle"
@@ -608,7 +610,7 @@ class ScreenStream:
         for client in self.clients:
             client.push_text(text)
 
-    def on_frame(self, frame: Frame):
+    def on_frame(self, frame: Frame, repeated: bool = False):
         if self.state != "active":
             self.set_state("active")
         payload = encode_frame(frame)
@@ -621,6 +623,8 @@ class ScreenStream:
             self.stats["bytes"] += len(payload)
             if h264_info.slice_kind(frame.nals[0]) == "B":
                 self.stats["b"] += 1
+            if repeated:
+                self.stats["r"] += 1
             if frame.key and (frame.sps, frame.pps) != self.described:
                 self.described = (frame.sps, frame.pps)
                 diag_log.info("diag flux : %s", h264_info.describe(frame.sps, frame.pps))
@@ -718,7 +722,7 @@ class ScreenStream:
     def log_stats(self, seconds: float):
         stats = self.stats
         diag_log.info(
-            "diag flux : %.0f img/s | %.0f kbit/s | écart max entre images %.0f ms | %d abandon(s) | file d'envoi max %.0f Ko | envoi max %.0f ms | niveau %s | capture %s | images B %d",
+            "diag flux : %.0f img/s | %.0f kbit/s | écart max entre images %.0f ms | %d abandon(s) | file d'envoi max %.0f Ko | envoi max %.0f ms | niveau %s | capture %s | images B %d | dont répétées %d",
             stats["frames"] / seconds,
             stats["bytes"] * 8 / 1000 / seconds,
             stats["gap"] * 1000,
@@ -728,8 +732,9 @@ class ScreenStream:
             QUALITY_LEVELS[self.running_index]["name"],
             self.pipeline_label,
             stats["b"],
+            stats["r"],
         )
-        stats.update(frames=0, bytes=0, gap=0.0, drops=0, backlog=0, send=0.0, b=0)
+        stats.update(frames=0, bytes=0, gap=0.0, drops=0, backlog=0, send=0.0, b=0, r=0)
 
     async def adapt_loop(self):
         loop = asyncio.get_running_loop()
@@ -761,7 +766,7 @@ class ScreenStream:
 
     async def supervise(self):
         loop = asyncio.get_running_loop()
-        self.stats.update(frames=0, bytes=0, gap=0.0, last=None, drops=0, backlog=0, send=0.0, b=0)
+        self.stats.update(frames=0, bytes=0, gap=0.0, last=None, drops=0, backlog=0, send=0.0, b=0, r=0)
         self.described = None
         adapt = asyncio.create_task(self.adapt_loop())
         try:
@@ -836,23 +841,47 @@ class ScreenStream:
                     stderr_tail.append(line.decode(errors="replace").strip())
 
             async def pump():
+                loop = asyncio.get_running_loop()
                 splitter = AnnexBSplitter()
                 assembler = FrameAssembler()
+                repeater = FrameRepeater()
+                last_emit = loop.time()
+                reported = None
+
+                def emit(frame):
+                    nonlocal last_emit
+                    frame.nals = repeater.process(frame.key, frame.sps, frame.pps, frame.nals)
+                    last_emit = loop.time()
+                    self.on_frame(frame)
+
                 while True:
+                    wait = IDLE_FLUSH_SECONDS if splitter.buffer else None
+                    if repeater.ready:
+                        due = max(0.001, last_emit + REPEAT_INTERVAL_SECONDS - loop.time())
+                        wait = due if wait is None else min(wait, due)
                     try:
-                        data = await asyncio.wait_for(source.read(65536), IDLE_FLUSH_SECONDS if splitter.buffer else None)
+                        data = await asyncio.wait_for(source.read(65536), wait)
                     except asyncio.TimeoutError:
                         last = splitter.take_open()
                         frames = assembler.push(last) if last else []
                         frames += assembler.flush()
                         for frame in frames:
-                            self.on_frame(frame)
+                            emit(frame)
+                        if repeater.ready and loop.time() - last_emit >= REPEAT_INTERVAL_SECONDS:
+                            skip = repeater.make_skip_nal()
+                            if skip is not None:
+                                last_emit = loop.time()
+                                self.on_frame(Frame(False, [skip], None, None), repeated=True)
                         continue
                     if not data:
                         return
                     for nal in splitter.feed(data):
                         for frame in assembler.push(nal):
-                            self.on_frame(frame)
+                            emit(frame)
+                    if repeater.reason != reported:
+                        reported = repeater.reason
+                        if reported is not None:
+                            log.info("Images de répétition désactivées : %s", reported)
 
             pump_task = asyncio.create_task(pump())
             exit_task = asyncio.create_task(proc.wait())

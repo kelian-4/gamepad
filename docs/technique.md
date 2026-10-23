@@ -53,7 +53,7 @@ Le fond de la manette peut afficher l'écran du PC en direct. La fonction est d�
 sudo gamepad-server server/gamepad_server.py --stream
 ```
 
-Options : `--stream-port` (8766 par défaut), `--stream-encoder auto|vaapi|nvenc|x264`. Avec `--diag`, une ligne toutes les 5 s indique les images par seconde, le débit, l'écart maximal entre deux images, les abandons, le niveau de qualité, la chaîne de capture utilisée et le nombre d'images B. À chaque démarrage de capture, une ligne décrit aussi le flux H.264 produit (profil, type de POC, codage CABAC ou CAVLC, images de référence). Le diagnostic `gamepad-server server/gamepad_server.py doctor --stream` liste les outils trouvés, la session graphique et les chaînes de capture possibles.
+Options : `--stream-port` (8766 par défaut), `--stream-encoder auto|vaapi|nvenc|x264`. Avec `--diag`, une ligne toutes les 5 s indique les images par seconde, le débit, l'écart maximal entre deux images, les abandons, le niveau de qualité, la chaîne de capture utilisée et le nombre d'images B et d'images répétées. À chaque démarrage de capture, une ligne décrit aussi le flux H.264 produit (profil, type de POC, codage CABAC ou CAVLC, images de référence). Le diagnostic `gamepad-server server/gamepad_server.py doctor --stream` liste les outils trouvés, la session graphique et les chaînes de capture possibles.
 
 ### Architecture
 
@@ -96,6 +96,12 @@ Sur le port du flux, l'app ouvre un WebSocket et envoie en texte :
 - Chaque appareil a une file de 2 images. Si le réseau ne suit pas, la file est vidée et les images suivantes sont ignorées jusqu'à la prochaine image clé (une par seconde environ) : on jette des images, on n'en met jamais en attente. Un client qui n'absorbe plus rien pendant 2 s est déconnecté du canal vidéo.
 - Les tampons d'envoi de la socket vidéo sont réduits (16 Ko côté système, 8 Ko côté programme) : tout octet en attente dans un tampon est du retard que l'abandon d'images ne voit pas. Avec `--diag`, la ligne `diag flux` indique la file d'envoi maximale (octets non partis, programme et système) et la durée d'envoi maximale d'une image.
 - L'image est affichée dès son arrivée (`DisplayImmediately`) et décodée par le matériel via `AVSampleBufferDisplayLayer`. Le flux H.264 n'indique pas où une image se termine : le serveur la ferme au début de la suivante, ou après 6 ms sans nouvelle donnée de la capture. Sans ce second cas, une capture qui n'encode que quand l'écran change (`wl-screenrec`) retenait chaque image jusqu'au changement suivant.
+
+### Plancher de 30 images par seconde
+
+Une capture n'émet rien quand l'écran ne change pas (`wl-screenrec` comme `wf-recorder`, quel que soit le compositeur). Pour que le flux ne passe jamais sous 30 images par seconde, le serveur intercale une image de répétition quand 28 ms se sont écoulées sans image réelle. C'est une image P où tous les macroblocs sont `P_Skip` (copie exacte de l'image précédente, quelques dizaines d'octets) : elle est produite par `server/h264_repeat.py` à partir de l'en-tête SPS/PPS du flux, en CABAC comme en CAVLC. Le flux reste libre de monter à 60 images par seconde quand l'écran bouge, les images de répétition n'apparaissent que dans les trous.
+
+Conditions : POC de type 2, une seule image de référence, une seule tranche par image, pas de prédiction pondérée ni d'entrelacement (c'est ce que produisent `wl-screenrec`, `wf-recorder` et `ffmpeg` avec les réglages du serveur). Sinon la fonction est désactivée et le serveur l'écrit dans son journal. Comme l'image de répétition est une image de référence, le numéro `frame_num` des images réelles suivantes est décalé du nombre d'images insérées depuis la dernière image clé. Avec `--diag`, la ligne `diag flux` indique le nombre d'images répétées.
 
 ### Qualité
 

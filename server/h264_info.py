@@ -113,12 +113,28 @@ def parse_pps(nal: bytes) -> Optional[dict]:
         reader.ue()
         reader.ue()
         cabac = reader.bit()
-        reader.bit()
+        bottom_field_poc = reader.bit()
         slice_groups = reader.ue() + 1
         default_refs = reader.ue() + 1
         reader.ue()
         weighted = reader.bit()
-        return {"cabac": cabac, "slice_groups": slice_groups, "default_refs": default_refs, "weighted_pred": weighted}
+        reader.bits(2)
+        init_qp = 26 + reader.se()
+        reader.se()
+        reader.se()
+        deblocking_control = reader.bit()
+        reader.bit()
+        redundant_pic_cnt = reader.bit()
+        return {
+            "cabac": cabac,
+            "bottom_field_poc": bottom_field_poc,
+            "slice_groups": slice_groups,
+            "default_refs": default_refs,
+            "weighted_pred": weighted,
+            "init_qp": init_qp,
+            "deblocking_control": deblocking_control,
+            "redundant_pic_cnt": redundant_pic_cnt,
+        }
     except ValueError:
         return None
 
