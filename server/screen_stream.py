@@ -554,7 +554,7 @@ class ScreenStream:
         self.encoder = encoder
         self.diagnostics = diagnostics
         self.pipeline_label = ""
-        self.stats = {"frames": 0, "bytes": 0, "gap": 0.0, "last": None, "drops": 0, "backlog": 0, "send": 0.0, "b": 0, "r": 0}
+        self.stats = {"frames": 0, "bytes": 0, "gap": 0.0, "last": None, "drops": 0, "backlog": 0, "send": 0.0, "b": 0, "r": 0, "sent": 0, "held": 0}
         self.described = None
         self.clients = set()
         self.state = "idle"
@@ -629,6 +629,8 @@ class ScreenStream:
                 self.described = (frame.sps, frame.pps)
                 diag_log.info("diag flux : %s", h264_info.describe(frame.sps, frame.pps))
         for client in list(self.clients):
+            if self.diagnostics and client.need_key and not frame.key:
+                self.stats["held"] += 1
             dropped = client.offer(payload, frame.key)
             if dropped:
                 self.stats["drops"] += 1
@@ -713,6 +715,8 @@ class ScreenStream:
                     self.drops.append(asyncio.get_running_loop().time())
                 if self.diagnostics:
                     self.stats["send"] = max(self.stats["send"], elapsed)
+                    if isinstance(item, bytes):
+                        self.stats["sent"] += 1
         except asyncio.TimeoutError:
             log.warning("Flux d'écran : client trop lent, connexion vidéo fermée")
             await client.websocket.close()
@@ -722,7 +726,7 @@ class ScreenStream:
     def log_stats(self, seconds: float):
         stats = self.stats
         diag_log.info(
-            "diag flux : %.0f img/s | %.0f kbit/s | écart max entre images %.0f ms | %d abandon(s) | file d'envoi max %.0f Ko | envoi max %.0f ms | niveau %s | capture %s | images B %d | dont répétées %d",
+            "diag flux : %.0f img/s | %.0f kbit/s | écart max entre images %.0f ms | %d abandon(s) | file d'envoi max %.0f Ko | envoi max %.0f ms | niveau %s | capture %s | images B %d | dont répétées %d | envoyées %.0f img/s | écartées en attente d'image clé %d",
             stats["frames"] / seconds,
             stats["bytes"] * 8 / 1000 / seconds,
             stats["gap"] * 1000,
@@ -733,8 +737,10 @@ class ScreenStream:
             self.pipeline_label,
             stats["b"],
             stats["r"],
+            stats["sent"] / seconds,
+            stats["held"],
         )
-        stats.update(frames=0, bytes=0, gap=0.0, drops=0, backlog=0, send=0.0, b=0, r=0)
+        stats.update(frames=0, bytes=0, gap=0.0, drops=0, backlog=0, send=0.0, b=0, r=0, sent=0, held=0)
 
     async def adapt_loop(self):
         loop = asyncio.get_running_loop()
@@ -766,7 +772,7 @@ class ScreenStream:
 
     async def supervise(self):
         loop = asyncio.get_running_loop()
-        self.stats.update(frames=0, bytes=0, gap=0.0, last=None, drops=0, backlog=0, send=0.0, b=0, r=0)
+        self.stats.update(frames=0, bytes=0, gap=0.0, last=None, drops=0, backlog=0, send=0.0, b=0, r=0, sent=0, held=0)
         self.described = None
         adapt = asyncio.create_task(self.adapt_loop())
         try:
