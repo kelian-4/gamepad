@@ -33,7 +33,7 @@ HANDSHAKE_TIMEOUT = 5.0
 SEND_TIMEOUT = 2.0
 SLOW_SEND_SECONDS = 0.25
 SOFTWARE_MAX_FPS = 30
-CLIENT_QUEUE_SIZE = 2
+CLIENT_QUEUE_SIZE = 40
 SOCKET_SEND_BUFFER = 16384
 WRITE_BUFFER_HIGH = 8192
 WRITE_BUFFER_LOW = 2048
@@ -46,6 +46,8 @@ ADAPT_MIN_STEP_INTERVAL = 6.0
 ADAPT_CLEAN_TIME_TO_RECOVER = 45.0
 IDLE_FLUSH_SECONDS = 0.006
 REPEAT_INTERVAL_SECONDS = 0.028
+KEY_WAIT_RESTART_SECONDS = 3.0
+KEY_WAIT_RESTART_COOLDOWN = 15.0
 DIAG_INTERVAL_TICKS = 5
 
 QUALITY_LEVELS = (
@@ -432,6 +434,11 @@ class StreamClient:
         self.fixed = fixed
         self.queue = asyncio.Queue(maxsize=CLIENT_QUEUE_SIZE)
         self.need_key = True
+        self.sending = False
+        self.key_wait_since = None
+
+    def idle(self) -> bool:
+        return not self.need_key and not self.sending and self.queue.empty()
 
     def offer(self, payload: bytes, key: bool) -> bool:
         if self.need_key and not key:
@@ -564,6 +571,7 @@ class ScreenStream:
         self.drops = collections.deque()
         self.last_change = 0.0
         self.supervisor = None
+        self.last_key_restart = float("-inf")
         self.restart = asyncio.Event()
 
     def availability(self) -> Optional[str]:
@@ -709,7 +717,11 @@ class ScreenStream:
             while True:
                 item = await client.queue.get()
                 started = time.perf_counter()
-                await asyncio.wait_for(client.websocket.send(item), SEND_TIMEOUT)
+                client.sending = True
+                try:
+                    await asyncio.wait_for(client.websocket.send(item), SEND_TIMEOUT)
+                finally:
+                    client.sending = False
                 elapsed = time.perf_counter() - started
                 if elapsed > SLOW_SEND_SECONDS and client.fixed is None:
                     self.drops.append(asyncio.get_running_loop().time())
@@ -754,6 +766,18 @@ class ScreenStream:
                 if ticks % DIAG_INTERVAL_TICKS == 0 and self.clients:
                     self.log_stats(DIAG_INTERVAL_TICKS * ADAPT_INTERVAL)
             now = loop.time()
+            waiting = False
+            for client in list(self.clients):
+                if not client.need_key:
+                    client.key_wait_since = None
+                elif client.key_wait_since is None:
+                    client.key_wait_since = now
+                elif now - client.key_wait_since > KEY_WAIT_RESTART_SECONDS:
+                    waiting = True
+            if waiting and now - self.last_key_restart > KEY_WAIT_RESTART_COOLDOWN:
+                self.last_key_restart = now
+                log.info("Flux d'écran : aucune image clé reçue depuis %.0f s, la capture est relancée", KEY_WAIT_RESTART_SECONDS)
+                self.restart.set()
             while self.drops and now - self.drops[0] > ADAPT_DROP_WINDOW:
                 self.drops.popleft()
             since_change = now - self.last_change
@@ -873,7 +897,7 @@ class ScreenStream:
                         frames += assembler.flush()
                         for frame in frames:
                             emit(frame)
-                        if repeater.ready and loop.time() - last_emit >= REPEAT_INTERVAL_SECONDS:
+                        if repeater.ready and loop.time() - last_emit >= REPEAT_INTERVAL_SECONDS and all(client.idle() for client in self.clients):
                             skip = repeater.make_skip_nal()
                             if skip is not None:
                                 last_emit = loop.time()
