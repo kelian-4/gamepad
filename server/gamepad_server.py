@@ -36,6 +36,8 @@ MDNS_SERVICE_TYPE = "_gamepad._tcp.local."
 NETWORK_POLL_SECONDS = 1.5
 CONTROL_TOS = 0xB8
 SERVER_NICE = -10
+SERVER_RT_PRIORITY = 10
+REALTIME_BUDGET_US = 2_000_000
 RESTART_ENV = "GAMEPAD_RESTARTED"
 SECRET_ENV = "GAMEPAD_STREAM_SECRET"
 PROTOCOL_VERSION = 1
@@ -254,10 +256,16 @@ def disable_nagle(websocket):
 
 def raise_priority():
     try:
-        os.setpriority(os.PRIO_PROCESS, 0, SERVER_NICE)
-    except OSError as exc:
-        log.info("Priorité du serveur inchangée (%s), lance-le avec sudo pour la relever", exc.strerror)
-        return
+        resource.setrlimit(resource.RLIMIT_RTTIME, (REALTIME_BUDGET_US, REALTIME_BUDGET_US * 2))
+        os.sched_setscheduler(0, os.SCHED_RR | os.SCHED_RESET_ON_FORK, os.sched_param(SERVER_RT_PRIORITY))
+        log.info("Priorité temps réel activée pour la boucle du serveur (SCHED_RR %d)", SERVER_RT_PRIORITY)
+    except (OSError, AttributeError, ValueError) as exc:
+        log.info("Priorité temps réel indisponible (%s), priorité normale relevée à la place", getattr(exc, "strerror", None) or exc)
+        try:
+            os.setpriority(os.PRIO_PROCESS, 0, SERVER_NICE)
+        except OSError as nice_exc:
+            log.info("Priorité du serveur inchangée (%s), lance-le avec sudo pour la relever", nice_exc.strerror)
+            return
     try:
         with open("/proc/self/autogroup", "w", encoding="ascii") as group:
             group.write(str(SERVER_NICE))
