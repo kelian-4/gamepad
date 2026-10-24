@@ -35,7 +35,14 @@ final class ScreenStreamClient: ObservableObject {
     private var format: CMVideoFormatDescription?
     private var currentSPS: [UInt8] = []
     private var currentPPS: [UInt8] = []
+    private var udpConnection: NWConnection?
+    private var reassembler: VideoReassembler?
+    private var udpTimer: DispatchSourceTimer?
+    private var udpEngaged = false
+    private var udpLastPacketAt: Double = 0
 
+    private static let udpSilenceSeconds: Double = 2
+    private static let udpTickInterval: Double = 0.004
     private static let retryDelay: Double = 3
     private static let stallSeconds: UInt64 = 3
     private static let watchdogInterval: Double = 1
@@ -87,7 +94,123 @@ final class ScreenStreamClient: ObservableObject {
         }
     }
 
+    private static func clock() -> Double {
+        return Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
+    }
+
+    private static func hexBytes(_ text: String) -> [UInt8]? {
+        guard text.count % 2 == 0 else { return nil }
+        var result: [UInt8] = []
+        var index = text.startIndex
+        while index < text.endIndex {
+            let next = text.index(index, offsetBy: 2)
+            guard let value = UInt8(text[index..<next], radix: 16) else { return nil }
+            result.append(value)
+            index = next
+        }
+        return result
+    }
+
+    private func startUdp(port: UInt16, token: [UInt8]) {
+        stopUdp()
+        guard let target, token.count == 8, let udpPort = NWEndpoint.Port(rawValue: port) else { return }
+        let conn = NWConnection(host: NWEndpoint.Host(target.endpoint.host), port: udpPort, using: .udp)
+        let engine = VideoReassembler(token: token)
+        let generationToken = generation
+        udpConnection = conn
+        reassembler = engine
+        udpEngaged = false
+        let now = Self.clock()
+        udpLastPacketAt = now
+        conn.stateUpdateHandler = { [weak self, weak conn] newState in
+            self?.queue.async {
+                guard let self, let conn, self.udpConnection === conn, self.generation == generationToken else { return }
+                if case .failed = newState {
+                    self.abandonUdp()
+                }
+            }
+        }
+        conn.start(queue: queue)
+        udpSend(engine.start(now: now))
+        receiveUdp(on: conn, token: generationToken)
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + Self.udpTickInterval, repeating: Self.udpTickInterval, leeway: .milliseconds(1))
+        timer.setEventHandler { [weak self] in
+            self?.udpTick(token: generationToken)
+        }
+        udpTimer = timer
+        timer.resume()
+    }
+
+    private func stopUdp() {
+        udpTimer?.cancel()
+        udpTimer = nil
+        if let old = udpConnection {
+            udpConnection = nil
+            old.stateUpdateHandler = nil
+            old.cancel()
+        }
+        reassembler = nil
+        udpEngaged = false
+    }
+
+    private func abandonUdp() {
+        guard reassembler != nil else { return }
+        stopUdp()
+        needsKeyFrame = true
+        sendJSON(["type": "udp", "state": "off"])
+    }
+
+    private func udpSend(_ bytes: [UInt8]) {
+        udpConnection?.send(content: Data(bytes), completion: .idempotent)
+    }
+
+    private func receiveUdp(on conn: NWConnection, token: Int) {
+        conn.receiveMessage { [weak self, weak conn] data, _, _, error in
+            guard let self, let conn, self.udpConnection === conn, self.generation == token else { return }
+            if error != nil {
+                self.abandonUdp()
+                return
+            }
+            if let data, !data.isEmpty {
+                self.ingestDatagram([UInt8](data))
+            }
+            self.receiveUdp(on: conn, token: token)
+        }
+    }
+
+    private func ingestDatagram(_ bytes: [UInt8]) {
+        guard let engine = reassembler else { return }
+        let now = Self.clock()
+        udpLastPacketAt = now
+        let wasActive = engine.isActive
+        engine.ingest(bytes, now: now)
+        if !wasActive && engine.isActive {
+            udpEngaged = true
+            needsKeyFrame = true
+        }
+        for payload in engine.popReady() {
+            handleVideo(payload)
+        }
+    }
+
+    private func udpTick(token: Int) {
+        guard generation == token, let engine = reassembler else { return }
+        let now = Self.clock()
+        if now - udpLastPacketAt > Self.udpSilenceSeconds {
+            abandonUdp()
+            return
+        }
+        for payload in engine.popReady() {
+            handleVideo(payload)
+        }
+        for packet in engine.tick(now: now) {
+            udpSend(packet)
+        }
+    }
+
     private func teardown() {
+        stopUdp()
         generation += 1
         retryWork?.cancel()
         retryWork = nil
@@ -128,7 +251,7 @@ final class ScreenStreamClient: ObservableObject {
                 guard let self, let conn, self.connection === conn, self.generation == token else { return }
                 switch newState {
                 case .ready:
-                    self.sendJSON(["type": "stream_hello", "secret": target.secret, "quality": target.quality])
+                    self.sendJSON(["type": "stream_hello", "secret": target.secret, "quality": target.quality, "udp": true])
                     self.scheduleWatchdog(token: token)
                 case .failed:
                     self.fail("Flux interrompu", retry: true)
@@ -182,7 +305,7 @@ final class ScreenStreamClient: ObservableObject {
                 let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
                 if metadata?.opcode == .text {
                     self.handleText(data)
-                } else {
+                } else if !self.udpEngaged {
                     self.handleVideo([UInt8](data))
                 }
             }
@@ -190,7 +313,7 @@ final class ScreenStreamClient: ObservableObject {
         }
     }
 
-    private func sendJSON(_ object: [String: String]) {
+    private func sendJSON(_ object: [String: Any]) {
         guard let conn = connection, let data = try? JSONSerialization.data(withJSONObject: object) else { return }
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "streamMessage", metadata: [metadata])
@@ -204,9 +327,18 @@ final class ScreenStreamClient: ObservableObject {
         case "stream_ack":
             if (obj["ok"] as? Bool) == true {
                 setState(.waiting)
+                if let port = obj["udpPort"] as? Int, port > 0, port < 65536,
+                   let tokenText = obj["udpToken"] as? String, let token = Self.hexBytes(tokenText) {
+                    startUdp(port: UInt16(port), token: token)
+                }
             } else {
                 let reason = (obj["reason"] as? String) ?? "flux refusé"
                 fail(reason, retry: false)
+            }
+        case "stream_transport":
+            if (obj["mode"] as? String) == "ws" {
+                stopUdp()
+                needsKeyFrame = true
             }
         case "stream_status":
             let serverState = (obj["state"] as? String) ?? ""
