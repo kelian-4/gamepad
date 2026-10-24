@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import resource
 import shutil
 import socket
 import subprocess
@@ -256,6 +257,12 @@ def raise_priority():
         os.setpriority(os.PRIO_PROCESS, 0, SERVER_NICE)
     except OSError as exc:
         log.info("Priorité du serveur inchangée (%s), lance-le avec sudo pour la relever", exc.strerror)
+        return
+    try:
+        with open("/proc/self/autogroup", "w", encoding="ascii") as group:
+            group.write(str(SERVER_NICE))
+    except OSError:
+        pass
 
 def default_interface() -> "str | None":
     try:
@@ -305,6 +312,18 @@ class DiagStats:
         self.process_max = 0.0
         self.echo_max = 0.0
 
+def read_pressure() -> dict:
+    totals = {}
+    for name in ("cpu", "memory", "io"):
+        try:
+            with open(f"/proc/pressure/{name}", encoding="ascii") as handle:
+                for line in handle:
+                    if line.startswith("some"):
+                        totals[name] = int(line.rsplit("total=", 1)[1])
+        except (OSError, ValueError, IndexError):
+            pass
+    return totals
+
 async def diag_monitor(diag: DiagStats):
     loop = asyncio.get_running_loop()
     tick = 0.01
@@ -312,6 +331,9 @@ async def diag_monitor(diag: DiagStats):
     lag_max = 0.0
     lag_count = 0
     report_at = loop.time() + 1.0
+    pressure = read_pressure()
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    usage_at = time.monotonic()
     while True:
         started = loop.time()
         await asyncio.sleep(tick)
@@ -321,9 +343,18 @@ async def diag_monitor(diag: DiagStats):
         lag_max = max(lag_max, lag)
         lag_count += 1
         if now >= report_at:
+            current_pressure = read_pressure()
+            current_usage = resource.getrusage(resource.RUSAGE_SELF)
+            current_at = time.monotonic()
+            blocked = {name: (current_pressure.get(name, 0) - pressure.get(name, 0)) / 1000 for name in ("cpu", "memory", "io")}
+            cpu_share = (current_usage.ru_utime + current_usage.ru_stime - usage.ru_utime - usage.ru_stime) / max(current_at - usage_at, 1e-6) * 100
+            preempted = current_usage.ru_nivcsw - usage.ru_nivcsw
+            pressure = current_pressure
+            usage = current_usage
+            usage_at = current_at
             if diag.messages:
                 diag_log.info(
-                    "diag: retard boucle moy %.2f max %.2f ms | %d msg | écart max entre pings %.0f ms | montée relative moy %.1f max %.1f ms | traitement max %.2f ms | écho max %.2f ms",
+                    "diag: retard boucle moy %.2f max %.2f ms | %d msg | écart max entre pings %.0f ms | montée relative moy %.1f max %.1f ms | traitement max %.2f ms | écho max %.2f ms | machine bloquée cpu %.0f mém %.0f dsk %.0f ms/s | CPU serveur %.0f %% | préemptions %d",
                     lag_sum / lag_count * 1000,
                     lag_max * 1000,
                     diag.messages,
@@ -332,6 +363,11 @@ async def diag_monitor(diag: DiagStats):
                     diag.up_max,
                     diag.process_max * 1000,
                     diag.echo_max * 1000,
+                    blocked["cpu"],
+                    blocked["memory"],
+                    blocked["io"],
+                    cpu_share,
+                    preempted,
                 )
             diag.reset()
             lag_sum = 0.0

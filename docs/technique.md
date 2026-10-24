@@ -35,6 +35,8 @@ diag: retard boucle moy 0.63 max 11.72 ms | 62 msg | écart max entre pings 151 
 - **écart max entre pings** : intervalle le plus long entre deux pings reçus de l'iPhone, envoyés toutes les 150 ms. Un écart bien au-dessus de 150 ms alors que le retard de boucle est faible indique un délai avant l'arrivée des données (envoi côté iPhone ou trajet réseau).
 - **montée relative** : variation du délai iPhone vers PC seul. Le décalage constant entre les deux horloges est éliminé en retranchant le meilleur délai observé sur les 10 dernières secondes.
 - **traitement max / écho max** : temps passé par le serveur à traiter un message et à renvoyer un ping.
+- **machine bloquée cpu / mém / dsk** : millisecondes par seconde pendant lesquelles au moins une tâche de la machine attendait le processeur, la mémoire ou le disque (pression système du noyau, `/proc/pressure`). Si le retard de boucle monte en même temps qu'une de ces valeurs, la cause est la charge de la machine et non le réseau.
+- **CPU serveur / préemptions** : part de processeur utilisée par le serveur et nombre de fois où le noyau l'a interrompu pour donner la place à un autre processus pendant la seconde.
 
 ## Robustesse
 
@@ -108,7 +110,7 @@ Conditions : POC de type 2, une seule image de référence, une seule tranche pa
 
 Mesures faites avec la chaîne complète (capture à 60 images par seconde, WebSocket réelle, 6 Mbit/s) : le retard de la boucle du serveur reste sous 10 ms (99 % sous 2 ms). Les pics de 100 à 300 ms vus dans `--diag` quand l'écran bouge viennent donc de la charge de la machine ou du réseau, pas du code. Le serveur agit sur ce qu'il contrôle :
 
-- le processus passe à la priorité `nice -10` (nécessite `sudo`), pour qu'une machine chargée par un jeu et l'encodeur ne retarde pas les pings ni les touches ;
+- le processus passe à la priorité `nice -10`, et son groupe de session aussi (`/proc/self/autogroup`, sans quoi le noyau ne compare le `nice` qu'à l'intérieur du terminal) ; cela nécessite `sudo` ; pour qu'une machine chargée par un jeu et l'encodeur ne retarde pas les pings ni les touches ;
 - le canal de contrôle (touches, pings) est marqué `DSCP EF` (priorité voix du Wi-Fi WMM), le flux vidéo reste en priorité normale ;
 - la compression WebSocket est désactivée sur les deux canaux (elle coûtait environ 30 % de CPU sur de la vidéo déjà compressée) ;
 - sur une liaison Wi-Fi, l'économie d'énergie de la carte (qui retient les paquets jusqu'à 100 ms) est coupée pendant la session avec `iw`, puis rétablie à l'arrêt ou au changement de réseau ; sans `sudo`, sans `iw` ou en Ethernet, rien n'est modifié ;
