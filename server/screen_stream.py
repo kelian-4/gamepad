@@ -46,6 +46,8 @@ ADAPT_MIN_STEP_INTERVAL = 6.0
 ADAPT_CLEAN_TIME_TO_RECOVER = 45.0
 IDLE_FLUSH_SECONDS = 0.006
 REPEAT_INTERVAL_SECONDS = 0.028
+LATENCY_SLOW_SECONDS = 0.25
+LATENCY_MAX_SECONDS = 0.5
 KEY_WAIT_RESTART_SECONDS = 3.0
 KEY_WAIT_RESTART_COOLDOWN = 15.0
 DIAG_INTERVAL_TICKS = 5
@@ -453,7 +455,7 @@ class StreamClient:
                 return True
         if key:
             self.need_key = False
-        self.queue.put_nowait(payload)
+        self.queue.put_nowait((time.monotonic(), payload))
         return dropped
 
     def push_text(self, text: str):
@@ -461,7 +463,7 @@ class StreamClient:
             while not self.queue.empty():
                 self.queue.get_nowait()
             self.need_key = True
-        self.queue.put_nowait(text)
+        self.queue.put_nowait((time.monotonic(), text))
 
 
 def tune_socket(websocket):
@@ -561,7 +563,7 @@ class ScreenStream:
         self.encoder = encoder
         self.diagnostics = diagnostics
         self.pipeline_label = ""
-        self.stats = {"frames": 0, "bytes": 0, "gap": 0.0, "last": None, "drops": 0, "backlog": 0, "send": 0.0, "b": 0, "r": 0, "sent": 0, "held": 0}
+        self.stats = {"frames": 0, "bytes": 0, "gap": 0.0, "last": None, "drops": 0, "backlog": 0, "send": 0.0, "b": 0, "r": 0, "sent": 0, "held": 0, "wait": 0.0}
         self.described = None
         self.clients = set()
         self.state = "idle"
@@ -582,7 +584,7 @@ class ScreenStream:
         return "; ".join(failures)
 
     async def start(self, host: str, port: int):
-        return await websockets.serve(self.handle, host, port, max_size=4096)
+        return await websockets.serve(self.handle, host, port, max_size=4096, compression=None)
 
     async def stop(self, server):
         server.close()
@@ -715,7 +717,21 @@ class ScreenStream:
     async def send_loop(self, client: StreamClient):
         try:
             while True:
-                item = await client.queue.get()
+                queued_at, item = await client.queue.get()
+                waited = time.monotonic() - queued_at
+                if isinstance(item, bytes):
+                    if self.diagnostics:
+                        self.stats["wait"] = max(self.stats["wait"], waited)
+                    if waited > LATENCY_MAX_SECONDS:
+                        while not client.queue.empty():
+                            client.queue.get_nowait()
+                        client.need_key = True
+                        self.stats["drops"] += 1
+                        if client.fixed is None:
+                            self.drops.append(asyncio.get_running_loop().time())
+                        continue
+                    if waited > LATENCY_SLOW_SECONDS and client.fixed is None:
+                        self.drops.append(asyncio.get_running_loop().time())
                 started = time.perf_counter()
                 client.sending = True
                 try:
@@ -738,7 +754,7 @@ class ScreenStream:
     def log_stats(self, seconds: float):
         stats = self.stats
         diag_log.info(
-            "diag flux : %.0f img/s | %.0f kbit/s | écart max entre images %.0f ms | %d abandon(s) | file d'envoi max %.0f Ko | envoi max %.0f ms | niveau %s | capture %s | images B %d | dont répétées %d | envoyées %.0f img/s | écartées en attente d'image clé %d",
+            "diag flux : %.0f img/s | %.0f kbit/s | écart max entre images %.0f ms | %d abandon(s) | file d'envoi max %.0f Ko | envoi max %.0f ms | niveau %s | capture %s | images B %d | dont répétées %d | envoyées %.0f img/s | écartées en attente d'image clé %d | attente max en file %.0f ms",
             stats["frames"] / seconds,
             stats["bytes"] * 8 / 1000 / seconds,
             stats["gap"] * 1000,
@@ -751,8 +767,9 @@ class ScreenStream:
             stats["r"],
             stats["sent"] / seconds,
             stats["held"],
+            stats["wait"] * 1000,
         )
-        stats.update(frames=0, bytes=0, gap=0.0, drops=0, backlog=0, send=0.0, b=0, r=0, sent=0, held=0)
+        stats.update(frames=0, bytes=0, gap=0.0, drops=0, backlog=0, send=0.0, b=0, r=0, sent=0, held=0, wait=0.0)
 
     async def adapt_loop(self):
         loop = asyncio.get_running_loop()
@@ -796,7 +813,7 @@ class ScreenStream:
 
     async def supervise(self):
         loop = asyncio.get_running_loop()
-        self.stats.update(frames=0, bytes=0, gap=0.0, last=None, drops=0, backlog=0, send=0.0, b=0, r=0, sent=0, held=0)
+        self.stats.update(frames=0, bytes=0, gap=0.0, last=None, drops=0, backlog=0, send=0.0, b=0, r=0, sent=0, held=0, wait=0.0)
         self.described = None
         adapt = asyncio.create_task(self.adapt_loop())
         try:

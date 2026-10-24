@@ -104,6 +104,16 @@ Une capture n'émet rien quand l'écran ne change pas (`wl-screenrec` comme `wf-
 
 Conditions : POC de type 2, une seule image de référence, une seule tranche par image, pas de prédiction pondérée ni d'entrelacement (c'est ce que produisent `wl-screenrec`, `wf-recorder` et `ffmpeg` avec les réglages du serveur). Sinon la fonction est désactivée et le serveur l'écrit dans son journal. Comme l'image de répétition est une image de référence, le numéro `frame_num` des images réelles suivantes est décalé du nombre d'images insérées depuis la dernière image clé. Avec `--diag`, la ligne `diag flux` indique le nombre d'images répétées.
 
+### Latence du serveur et du ping
+
+Mesures faites avec la chaîne complète (capture à 60 images par seconde, WebSocket réelle, 6 Mbit/s) : le retard de la boucle du serveur reste sous 10 ms (99 % sous 2 ms). Les pics de 100 à 300 ms vus dans `--diag` quand l'écran bouge viennent donc de la charge de la machine ou du réseau, pas du code. Le serveur agit sur ce qu'il contrôle :
+
+- le processus passe à la priorité `nice -10` (nécessite `sudo`), pour qu'une machine chargée par un jeu et l'encodeur ne retarde pas les pings ni les touches ;
+- le canal de contrôle (touches, pings) est marqué `DSCP EF` (priorité voix du Wi-Fi WMM), le flux vidéo reste en priorité normale ;
+- la compression WebSocket est désactivée sur les deux canaux (elle coûtait environ 30 % de CPU sur de la vidéo déjà compressée) ;
+- sur une liaison Wi-Fi, l'économie d'énergie de la carte (qui retient les paquets jusqu'à 100 ms) est coupée pendant la session avec `iw`, puis rétablie à l'arrêt ou au changement de réseau ; sans `sudo`, sans `iw` ou en Ethernet, rien n'est modifié ;
+- une image qui attend plus de 0,25 s dans la file d'envoi compte comme un signe de réseau saturé pour l'adaptation automatique de la qualité ; au-delà de 0,5 s la file est vidée pour ne pas laisser le retard grandir. `--diag` affiche `attente max en file`.
+
 ### Qualité
 
 | Niveau | Hauteur | Images/s | Débit visé |

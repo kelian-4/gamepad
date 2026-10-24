@@ -7,7 +7,10 @@ import errno
 import json
 import logging
 import os
+import re
+import shutil
 import socket
+import subprocess
 import sys
 import time
 
@@ -30,6 +33,8 @@ except ImportError:
 
 MDNS_SERVICE_TYPE = "_gamepad._tcp.local."
 NETWORK_POLL_SECONDS = 1.5
+CONTROL_TOS = 0xB8
+SERVER_NICE = -10
 RESTART_ENV = "GAMEPAD_RESTARTED"
 SECRET_ENV = "GAMEPAD_STREAM_SECRET"
 PROTOCOL_VERSION = 1
@@ -242,8 +247,50 @@ def disable_nagle(websocket):
         sock = websocket.transport.get_extra_info("socket")
         if sock is not None:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, CONTROL_TOS)
     except Exception as exc:
         log.warning("TCP_NODELAY non appliqué: %s", exc)
+
+def raise_priority():
+    try:
+        os.setpriority(os.PRIO_PROCESS, 0, SERVER_NICE)
+    except OSError as exc:
+        log.info("Priorité du serveur inchangée (%s), lance-le avec sudo pour la relever", exc.strerror)
+
+def default_interface() -> "str | None":
+    try:
+        with open("/proc/net/route", encoding="ascii") as routes:
+            for line in list(routes)[1:]:
+                fields = line.split()
+                if len(fields) > 3 and fields[1] == "00000000" and int(fields[3], 16) & 2:
+                    return fields[0]
+    except (OSError, ValueError):
+        pass
+    return None
+
+def wifi_power_save_off() -> "str | None":
+    interface = default_interface()
+    if interface is None or os.geteuid() != 0 or shutil.which("iw") is None:
+        return None
+    if not os.path.isdir(f"/sys/class/net/{interface}/wireless"):
+        return None
+    try:
+        state = subprocess.run(["iw", "dev", interface, "get", "power_save"], capture_output=True, text=True, timeout=3).stdout
+        if not re.search(r"power save:\s*on", state, re.IGNORECASE):
+            return None
+        subprocess.run(["iw", "dev", interface, "set", "power_save", "off"], check=True, capture_output=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    log.info("Économie d'énergie Wi-Fi coupée sur %s pendant la session (rétablie à l'arrêt)", interface)
+    return interface
+
+def wifi_power_save_restore(interface: "str | None"):
+    if interface is None:
+        return
+    try:
+        subprocess.run(["iw", "dev", interface, "set", "power_save", "on"], check=True, capture_output=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 class DiagStats:
     def __init__(self):
@@ -560,6 +607,8 @@ async def start_screen_stream(host, stream_port, encoder, diagnostics=False):
 
 async def main(host="0.0.0.0", port=8765, max_pads=4, diag_enabled=False,
                stream_enabled=False, stream_port=8766, stream_encoder="auto") -> "str | bool":
+    raise_priority()
+    power_interface = wifi_power_save_off()
     pool = GamepadPool(max_pads=max_pads)
     problem = uinput_problem()
     if problem:
@@ -595,6 +644,7 @@ async def main(host="0.0.0.0", port=8765, max_pads=4, diag_enabled=False,
             diag_task.cancel()
         if aiozc is not None:
             await aiozc.async_close()
+        wifi_power_save_restore(power_interface)
     return (stream.secret if stream else "") if changed.is_set() else False
 
 def restart_process(secret: str):
