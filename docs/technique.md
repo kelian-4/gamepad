@@ -43,6 +43,7 @@ diag: retard boucle moy 0.63 max 11.72 ms | 62 msg | écart max entre pings 151 
 - **Identité Xbox 360 émulée** : VID/PID `045e:028e`, reconnue nativement par Steam, Proton et SDL.
 - **Handshake versionné** : le client annonce sa version de protocole et sa plateforme, le serveur répond avec les fonctionnalités supportées ou la raison du refus.
 - **Multi-manettes** : jusqu'à 4 manettes virtuelles, une par appareil, chacune avec son propre device `uinput`.
+- **Changement de réseau** : le serveur relève l'adresse IP de la route par défaut toutes les 1,5 s. Quand une nouvelle adresse est confirmée sur deux relevés, il arrête la capture, ferme tous les appareils de l'ancien réseau et se relance sur place (même processus, mêmes options) : nouvelle annonce mDNS, nouveau QR code, journal de `--diag` conservé. Le secret du flux d'écran est transmis au nouveau lancement par l'environnement du processus, sans être écrit sur disque, pour que l'app n'ait pas à rescanner le QR code. Pendant une perte totale de réseau le serveur attend, et se relance dès qu'une adresse réapparaît. Le WebSocket de contrôle ferme ses connexions en 1 s au plus.
 - **Cycle de vie iOS** : écran toujours allumé pendant l'utilisation, gestes système différés sur les bords de l'écran.
 
 ## Flux de l'écran

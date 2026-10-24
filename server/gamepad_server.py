@@ -29,6 +29,9 @@ except ImportError:
     QRCODE_AVAILABLE = False
 
 MDNS_SERVICE_TYPE = "_gamepad._tcp.local."
+NETWORK_POLL_SECONDS = 1.5
+RESTART_ENV = "GAMEPAD_RESTARTED"
+SECRET_ENV = "GAMEPAD_STREAM_SECRET"
 PROTOCOL_VERSION = 1
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -37,7 +40,7 @@ diag_log = logging.getLogger("gamepad.diag")
 
 def route_diagnostics_to_file(path):
     path = os.path.abspath(path)
-    handler = logging.FileHandler(path, mode="w", encoding="utf-8")
+    handler = logging.FileHandler(path, mode="a" if os.environ.get(RESTART_ENV) else "w", encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     diag_log.addHandler(handler)
     diag_log.propagate = False
@@ -405,6 +408,33 @@ def local_ip() -> str:
     finally:
         s.close()
 
+def network_address() -> "str | None":
+    address = local_ip()
+    return None if address.startswith("127.") else address
+
+async def watch_network(known: "str | None", changed: asyncio.Event):
+    candidate = None
+    lost = False
+    while True:
+        await asyncio.sleep(NETWORK_POLL_SECONDS)
+        current = network_address()
+        if current is None:
+            candidate = None
+            if not lost:
+                lost = True
+                log.warning("Réseau perdu, en attente d'un nouveau réseau")
+            continue
+        lost = False
+        if current == known:
+            candidate = None
+            continue
+        if current != candidate:
+            candidate = current
+            continue
+        log.info("Changement de réseau détecté (%s -> %s), le serveur se relance", known or "aucun", current)
+        changed.set()
+        return
+
 async def start_mdns(port: int) -> "AsyncZeroconf | None":
     if not ZEROCONF_AVAILABLE:
         log.warning("zeroconf non installé, découverte auto désactivée (pip install zeroconf)")
@@ -514,7 +544,7 @@ def print_pairing_qr(ip: str, port: int, stream_secret=None):
 
 async def start_screen_stream(host, stream_port, encoder, diagnostics=False):
     import screen_stream
-    stream = screen_stream.ScreenStream(screen_stream.generate_secret(), encoder, diagnostics)
+    stream = screen_stream.ScreenStream(os.environ.pop(SECRET_ENV, None) or screen_stream.generate_secret(), encoder, diagnostics)
     problem = stream.availability()
     if problem:
         log.warning("Flux d'écran désactivé : %s", problem)
@@ -529,7 +559,7 @@ async def start_screen_stream(host, stream_port, encoder, diagnostics=False):
     return stream, server, info
 
 async def main(host="0.0.0.0", port=8765, max_pads=4, diag_enabled=False,
-               stream_enabled=False, stream_port=8766, stream_encoder="auto"):
+               stream_enabled=False, stream_port=8766, stream_encoder="auto") -> "str | bool":
     pool = GamepadPool(max_pads=max_pads)
     problem = uinput_problem()
     if problem:
@@ -540,24 +570,39 @@ async def main(host="0.0.0.0", port=8765, max_pads=4, diag_enabled=False,
     stream = stream_server = stream_info = None
     if stream_enabled:
         stream, stream_server, stream_info = await start_screen_stream(host, stream_port, stream_encoder, diag_enabled)
+    changed = asyncio.Event()
+    watch_task = None
     try:
         async with websockets.serve(
             lambda ws: handler(ws, pool, diag, stream_info),
             host,
             port,
+            compression=None,
+            close_timeout=1,
         ):
             ip = local_ip()
             log.info("Serveur WebSocket sur %s:%d", ip, port)
             log.info("Jusqu'à %d manette(s) virtuelle(s) simultanée(s).", max_pads)
             print_pairing_qr(ip, port, stream.secret if stream else None)
-            await asyncio.Future()
+            watch_task = asyncio.create_task(watch_network(network_address(), changed))
+            await changed.wait()
     finally:
+        if watch_task is not None:
+            watch_task.cancel()
         if stream_server is not None:
             await stream.stop(stream_server)
         if diag_task is not None:
             diag_task.cancel()
         if aiozc is not None:
             await aiozc.async_close()
+    return (stream.secret if stream else "") if changed.is_set() else False
+
+def restart_process(secret: str):
+    os.environ[RESTART_ENV] = "1"
+    if secret:
+        os.environ[SECRET_ENV] = secret
+    sys.stdout.flush()
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Serveur de manette virtuelle")
@@ -579,7 +624,7 @@ if __name__ == "__main__":
         log.info("Diagnostics écrits dans %s", route_diagnostics_to_file(args.diag_file))
 
     try:
-        asyncio.run(main(
+        outcome = asyncio.run(main(
             host=args.host,
             port=args.port,
             max_pads=args.max_pads,
@@ -590,3 +635,6 @@ if __name__ == "__main__":
         ))
     except KeyboardInterrupt:
         log.info("Arrêt du serveur.")
+    else:
+        if outcome is not False:
+            restart_process(outcome)
