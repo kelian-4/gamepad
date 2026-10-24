@@ -21,6 +21,7 @@ from typing import Optional
 import websockets
 
 import h264_info
+import udp_video
 from h264_repeat import FrameRepeater
 
 log = logging.getLogger("gamepad.stream")
@@ -48,6 +49,9 @@ IDLE_FLUSH_SECONDS = 0.006
 REPEAT_INTERVAL_SECONDS = 0.028
 LATENCY_SLOW_SECONDS = 0.25
 LATENCY_MAX_SECONDS = 0.5
+GOP_CACHE_FRAMES = 4000
+GOP_CACHE_BYTES = 16 * 1024 * 1024
+UDP_LIVENESS_SECONDS = 3.0
 KEY_WAIT_RESTART_SECONDS = 3.0
 KEY_WAIT_RESTART_COOLDOWN = 15.0
 DIAG_INTERVAL_TICKS = 5
@@ -438,9 +442,24 @@ class StreamClient:
         self.need_key = True
         self.sending = False
         self.key_wait_since = None
+        self.udp = None
 
     def idle(self) -> bool:
+        if self.udp is not None and self.udp.active:
+            return self.udp.idle()
         return not self.need_key and not self.sending and self.queue.empty()
+
+    def resume_from(self, frames: list):
+        while not self.queue.empty():
+            self.queue.get_nowait()
+        if frames and len(frames) <= CLIENT_QUEUE_SIZE - 2:
+            now = time.monotonic()
+            for payload, _ in frames:
+                self.queue.put_nowait((now, payload))
+            self.need_key = False
+        else:
+            self.need_key = True
+        self.key_wait_since = None
 
     def offer(self, payload: bytes, key: bool) -> bool:
         if self.need_key and not key:
@@ -464,6 +483,10 @@ class StreamClient:
                 self.queue.get_nowait()
             self.need_key = True
         self.queue.put_nowait((time.monotonic(), text))
+
+
+def now_monotonic() -> float:
+    return time.monotonic()
 
 
 def tune_socket(websocket):
@@ -573,6 +596,12 @@ class ScreenStream:
         self.drops = collections.deque()
         self.last_change = 0.0
         self.supervisor = None
+        self.gop = []
+        self.gop_bytes = 0
+        self.gop_valid = False
+        self.udp_server = None
+        self.udp_port = None
+        self.udp_transport = None
         self.last_key_restart = float("-inf")
         self.restart = asyncio.Event()
 
@@ -584,10 +613,41 @@ class ScreenStream:
         return "; ".join(failures)
 
     async def start(self, host: str, port: int):
-        return await websockets.serve(self.handle, host, port, max_size=4096, compression=None)
+        server = await websockets.serve(self.handle, host, port, max_size=4096, compression=None)
+        try:
+            protocol = udp_video.UdpVideoServer(self.gop_frames, self.on_udp_loss, self.fall_back_to_websocket)
+            protocol.on_frame_sent = self.on_udp_frame_sent
+            self.udp_transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(lambda: protocol, local_addr=(host, port + 1))
+            self.udp_server = protocol
+            self.udp_port = port + 1
+            log.info("Flux d'écran : canal vidéo UDP sur le port %d", self.udp_port)
+        except OSError as exc:
+            log.warning("Flux d'écran : canal UDP indisponible (%s), le flux passe par le WebSocket", exc.strerror or exc)
+        return server
+
+    def gop_frames(self) -> list:
+        return list(self.gop) if self.gop_valid else []
+
+    def on_udp_loss(self, client):
+        if client.fixed is None:
+            self.drops.append(asyncio.get_running_loop().time())
+
+    def on_udp_frame_sent(self, session):
+        if self.diagnostics:
+            self.stats["sent"] += 1
+
+    def fall_back_to_websocket(self, client):
+        if client.udp is not None:
+            client.udp.addr = None
+            client.udp.queue.clear()
+        client.resume_from(self.gop_frames())
+        client.push_text(json.dumps({"type": "stream_transport", "mode": "ws"}))
+        log.info("Flux d'écran : le canal UDP ne passe plus, retour au WebSocket")
 
     async def stop(self, server):
         server.close()
+        if self.udp_server is not None:
+            self.udp_server.close()
         if self.supervisor is not None:
             self.supervisor.cancel()
             await asyncio.gather(self.supervisor, return_exceptions=True)
@@ -624,6 +684,17 @@ class ScreenStream:
         if self.state != "active":
             self.set_state("active")
         payload = encode_frame(frame)
+        if frame.key:
+            self.gop = [(payload, True)]
+            self.gop_bytes = len(payload)
+            self.gop_valid = True
+        elif self.gop_valid:
+            self.gop.append((payload, False))
+            self.gop_bytes += len(payload)
+            if len(self.gop) > GOP_CACHE_FRAMES or self.gop_bytes > GOP_CACHE_BYTES:
+                self.gop = []
+                self.gop_bytes = 0
+                self.gop_valid = False
         now = asyncio.get_running_loop().time()
         if self.diagnostics:
             if self.stats["last"] is not None:
@@ -639,6 +710,9 @@ class ScreenStream:
                 self.described = (frame.sps, frame.pps)
                 diag_log.info("diag flux : %s", h264_info.describe(frame.sps, frame.pps))
         for client in list(self.clients):
+            if client.udp is not None and client.udp.active:
+                client.udp.enqueue(payload, frame.key)
+                continue
             if self.diagnostics and client.need_key and not frame.key:
                 self.stats["held"] += 1
             dropped = client.offer(payload, frame.key)
@@ -684,13 +758,19 @@ class ScreenStream:
             return
         client = StreamClient(websocket, parse_quality(hello.get("quality")))
         self.clients.add(client)
-        await websocket.send(json.dumps({
+        client.resume_from(self.gop_frames())
+        ack = {
             "type": "stream_ack",
             "ok": True,
             "protocolVersion": STREAM_PROTOCOL_VERSION,
             "codec": "h264",
             "qualities": [level["name"] for level in QUALITY_LEVELS],
-        }))
+        }
+        if self.udp_server is not None and hello.get("udp") is True:
+            client.udp = self.udp_server.register(client)
+            ack["udpPort"] = self.udp_port
+            ack["udpToken"] = client.udp.token.hex()
+        await websocket.send(json.dumps(ack))
         log.info("Flux d'écran ouvert pour %s", peer)
         sender = asyncio.create_task(self.send_loop(client))
         self.on_clients_changed()
@@ -706,10 +786,14 @@ class ScreenStream:
                 if isinstance(message, dict) and message.get("type") == "quality":
                     client.fixed = parse_quality(message.get("quality"))
                     self.request_restart_if_needed()
+                elif isinstance(message, dict) and message.get("type") == "udp" and message.get("state") == "off":
+                    self.fall_back_to_websocket(client)
         except websockets.exceptions.ConnectionClosed:
             pass
         finally:
             sender.cancel()
+            if client.udp is not None and self.udp_server is not None:
+                self.udp_server.unregister(client.udp)
             self.clients.discard(client)
             self.on_clients_changed()
             log.info("Flux d'écran fermé pour %s", peer)
@@ -784,7 +868,13 @@ class ScreenStream:
                     self.log_stats(DIAG_INTERVAL_TICKS * ADAPT_INTERVAL)
             now = loop.time()
             waiting = False
+            if self.udp_server is not None:
+                for session in self.udp_server.check_liveness(now_monotonic(), UDP_LIVENESS_SECONDS):
+                    self.fall_back_to_websocket(session.owner)
             for client in list(self.clients):
+                if client.udp is not None and client.udp.active:
+                    client.key_wait_since = None
+                    continue
                 if not client.need_key:
                     client.key_wait_since = None
                 elif client.key_wait_since is None:

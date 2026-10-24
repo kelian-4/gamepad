@@ -94,6 +94,35 @@ Sur le port du flux, l'app ouvre un WebSocket et envoie en texte :
 - des messages texte `{"type":"stream_status","state":"waiting|active|unavailable|idle","level":"medium","reason":"..."}` ;
 - des messages binaires, un par image, dans un format prêt pour VideoToolbox (NAL en AVCC, préfixe de 4 octets) : 1 octet de drapeaux (bit 0 : image clé, bit 1 : paramètres présents), puis si le bit 1 est posé `u16 taille SPS`, SPS, `u16 taille PPS`, PPS, puis les NAL (`u32 taille`, données). Chaque image clé embarque ses paramètres, ce qui permet de démarrer ou reprendre sur n'importe laquelle.
 
+### Canal vidéo UDP
+
+Les lecteurs vidéo temps réel (Moonlight, Steam Link) envoient la vidéo en UDP : en TCP, un paquet perdu bloque tout ce qui suit jusqu'à sa retransmission, ce qui gèle l'image. Le serveur propose donc un canal UDP, sur le port du flux plus 1 (8767 par défaut), négocié par le WebSocket du flux. Sans réponse de l'UDP, ou avec une app qui ne le demande pas, le flux reste en WebSocket.
+
+Négociation : l'app ajoute `"udp":true` dans `stream_hello`. Le `stream_ack` contient alors `udpPort` et `udpToken` (8 octets en hexadécimal, propres à cette connexion). L'app ouvre un socket UDP vers `udpPort` et envoie `HELLO` toutes les 100 ms jusqu'à recevoir `ACK`. Dès le `HELLO`, le serveur envoie la vidéo en UDP et plus en WebSocket (qui ne porte plus que les messages texte). Tous les entiers sont big-endian.
+
+Du serveur vers l'app :
+
+| Type | Contenu |
+|---|---|
+| `0x01` image | `u8 type, u32 numéro d'image, u16 index du fragment, u16 nombre de fragments, u8 drapeaux` (bit 0 : image clé), puis jusqu'à 1200 octets de la charge utile |
+| `0x02` parité | `u8 type, u32 numéro d'image, u16 premier fragment du groupe, u8 taille du groupe, u16 XOR des longueurs`, puis 1200 octets : XOR des fragments du groupe, complétés par des zéros |
+| `0x03` accusé | `u8 type, 8 octets de jeton, u8 série, u32 numéro de la première image envoyée` |
+
+La charge utile d'une image est exactement le message binaire du WebSocket (drapeaux, SPS/PPS, NAL en AVCC). Les fragments sont groupés par 10 avec un paquet de parité : un fragment perdu par groupe se reconstruit sans retransmission (10 % de surcoût). Les images partent par lots de 20 paquets espacés de 1 ms pour ne pas saturer le Wi-Fi.
+
+De l'app vers le serveur, chaque paquet commence par `u8 type, 8 octets de jeton, u8 série` :
+
+| Type | Suite |
+|---|---|
+| `0x10` HELLO | rien (série 0) |
+| `0x13` RESYNC | rien, série incrémentée à chaque demande |
+| `0x12` NACK | `u32 numéro d'image, u8 n`, puis `n` × `u16` index de fragments manquants |
+| `0x11` STATS | `u16 images livrées, u16 images abandonnées, u16 fragments reconstruits, u16 retransmissions demandées` depuis le dernier rapport (toutes les 250 ms) |
+
+Reprise sur perte : l'app demande les fragments manquants (`NACK`) 12 ms après le premier paquet d'une image, 4 fois au plus, espacés de 30 ms. Le serveur garde les paquets des 500 dernières ms pour les renvoyer. Si l'image attendue n'est pas complète 150 ms après son premier paquet, l'app l'abandonne, vide son état, envoie `RESYNC` (répété toutes les 100 ms jusqu'à l'`ACK` de même série) et ignore tout jusqu'au numéro de départ de l'`ACK`. Le serveur répond en renvoyant, avec de nouveaux numéros d'image, l'image clé la plus récente et toutes les images qui la suivent (cache de l'image clé en mémoire, 4000 images ou 16 Mo au plus) : la reprise ne dépend pas de la prochaine image clé de l'encodeur, qui peut tarder plusieurs secondes quand l'écran bouge peu. Les images abandonnées sont signalées dans `STATS`, ce qui alimente l'adaptation automatique de la qualité.
+
+Repli : sans aucun paquet de l'app pendant 3 s, ou sur `{"type":"udp","state":"off"}` envoyé par l'app en WebSocket, le serveur revient au WebSocket et envoie `{"type":"stream_transport","mode":"ws"}`. Le cache de l'image clé sert aussi à un nouvel appareil en WebSocket, qui n'attend plus l'image clé suivante quand le cache est court.
+
 ### Latence et réseau
 
 - Chaque appareil a une file de 40 images (environ 0,7 s à 60 images par seconde), qui absorbe les à-coups du réseau. Au-delà, la file est vidée et les images suivantes sont ignorées jusqu'à la prochaine image clé. L'encodeur compte ses images et non le temps : quand l'écran bouge peu, une image clé peut mettre plusieurs secondes à venir, d'où l'intérêt de ne pas déborder pour rien. Si un appareil attend une image clé depuis plus de 3 s, la capture est relancée (au plus une fois toutes les 15 s), ce qui en produit une tout de suite. Un client qui n'absorbe plus rien pendant 2 s est déconnecté du canal vidéo.
