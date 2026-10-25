@@ -837,8 +837,10 @@ class ScreenStream:
 
     def log_stats(self, seconds: float):
         stats = self.stats
+        udp_clients = sum(1 for client in self.clients if client.udp is not None and client.udp.active)
+        counters = dict(self.udp_server.counters) if self.udp_server is not None else {"delivered": 0, "lost": 0, "recovered": 0, "requested": 0, "retransmitted": 0}
         diag_log.info(
-            "diag flux : %.0f img/s | %.0f kbit/s | écart max entre images %.0f ms | %d abandon(s) | file d'envoi max %.0f Ko | envoi max %.0f ms | niveau %s | capture %s | images B %d | dont répétées %d | envoyées %.0f img/s | écartées en attente d'image clé %d | attente max en file %.0f ms",
+            "diag flux : %.0f img/s | %.0f kbit/s | écart max entre images %.0f ms | %d abandon(s) | file d'envoi max %.0f Ko | envoi max %.0f ms | niveau %s | capture %s | images B %d | dont répétées %d | envoyées %.0f img/s | écartées en attente d'image clé %d | attente max en file %.0f ms | transport UDP %d WS %d | UDP livrées %d perdues %d récupérées %d redemandées %d retransmises %d",
             stats["frames"] / seconds,
             stats["bytes"] * 8 / 1000 / seconds,
             stats["gap"] * 1000,
@@ -852,7 +854,17 @@ class ScreenStream:
             stats["sent"] / seconds,
             stats["held"],
             stats["wait"] * 1000,
+            udp_clients,
+            len(self.clients) - udp_clients,
+            counters["delivered"],
+            counters["lost"],
+            counters["recovered"],
+            counters["requested"],
+            counters["retransmitted"],
         )
+        if self.udp_server is not None:
+            for name in counters:
+                self.udp_server.counters[name] = 0
         stats.update(frames=0, bytes=0, gap=0.0, drops=0, backlog=0, send=0.0, b=0, r=0, sent=0, held=0, wait=0.0)
 
     async def adapt_loop(self):

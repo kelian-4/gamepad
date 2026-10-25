@@ -13,6 +13,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 import websockets
@@ -36,6 +37,7 @@ MDNS_SERVICE_TYPE = "_gamepad._tcp.local."
 NETWORK_POLL_SECONDS = 1.5
 CONTROL_TOS = 0xB8
 SERVER_NICE = -10
+GIL_SWITCH_SECONDS = 0.0005
 SERVER_RT_PRIORITY = 10
 REALTIME_BUDGET_US = 2_000_000
 RESTART_ENV = "GAMEPAD_RESTARTED"
@@ -633,6 +635,58 @@ def print_pairing_qr(ip: str, port: int, stream_secret=None):
     print(render_qr(url))
     print(f"Scanne ce QR code depuis l'app ({url})", flush=True)
 
+class ControlServer:
+    def __init__(self, host, port, max_pads, diag_enabled, stream_info):
+        self.host = host
+        self.port = port
+        self.max_pads = max_pads
+        self.diag_enabled = diag_enabled
+        self.stream_info = stream_info
+        self.ready = threading.Event()
+        self.error = None
+        self.loop = None
+        self.stop_event = None
+        self.thread = threading.Thread(target=self.run, name="controle", daemon=True)
+
+    def start(self):
+        self.thread.start()
+        self.ready.wait()
+        if self.error is not None:
+            raise self.error
+
+    def stop(self):
+        if self.loop is not None and self.stop_event is not None:
+            self.loop.call_soon_threadsafe(self.stop_event.set)
+        self.thread.join(timeout=3)
+
+    def run(self):
+        try:
+            asyncio.run(self.serve())
+        except Exception as exc:
+            self.error = exc
+        finally:
+            self.ready.set()
+
+    async def serve(self):
+        self.loop = asyncio.get_running_loop()
+        self.stop_event = asyncio.Event()
+        pool = GamepadPool(max_pads=self.max_pads)
+        diag = DiagStats()
+        diag_task = asyncio.create_task(diag_monitor(diag)) if self.diag_enabled else None
+        try:
+            async with websockets.serve(
+                lambda ws: handler(ws, pool, diag, self.stream_info),
+                self.host,
+                self.port,
+                compression=None,
+                close_timeout=1,
+            ):
+                self.ready.set()
+                await self.stop_event.wait()
+        finally:
+            if diag_task is not None:
+                diag_task.cancel()
+
 async def start_screen_stream(host, stream_port, encoder, diagnostics=False):
     import screen_stream
     stream = screen_stream.ScreenStream(os.environ.pop(SECRET_ENV, None) or screen_stream.generate_secret(), encoder, diagnostics)
@@ -651,41 +705,33 @@ async def start_screen_stream(host, stream_port, encoder, diagnostics=False):
 
 async def main(host="0.0.0.0", port=8765, max_pads=4, diag_enabled=False,
                stream_enabled=False, stream_port=8766, stream_encoder="auto") -> "str | bool":
+    sys.setswitchinterval(GIL_SWITCH_SECONDS)
     raise_priority()
     power_interface = wifi_power_save_off()
-    pool = GamepadPool(max_pads=max_pads)
     problem = uinput_problem()
     if problem:
         log.warning("Les manettes virtuelles ne pourront pas être créées : %s", problem)
-    diag = DiagStats()
-    diag_task = asyncio.create_task(diag_monitor(diag)) if diag_enabled else None
     aiozc = await start_mdns(port)
     stream = stream_server = stream_info = None
     if stream_enabled:
         stream, stream_server, stream_info = await start_screen_stream(host, stream_port, stream_encoder, diag_enabled)
     changed = asyncio.Event()
     watch_task = None
+    control = ControlServer(host, port, max_pads, diag_enabled, stream_info)
     try:
-        async with websockets.serve(
-            lambda ws: handler(ws, pool, diag, stream_info),
-            host,
-            port,
-            compression=None,
-            close_timeout=1,
-        ):
-            ip = local_ip()
-            log.info("Serveur WebSocket sur %s:%d", ip, port)
-            log.info("Jusqu'à %d manette(s) virtuelle(s) simultanée(s).", max_pads)
-            print_pairing_qr(ip, port, stream.secret if stream else None)
-            watch_task = asyncio.create_task(watch_network(network_address(), changed))
-            await changed.wait()
+        await asyncio.to_thread(control.start)
+        ip = local_ip()
+        log.info("Serveur WebSocket sur %s:%d", ip, port)
+        log.info("Jusqu'à %d manette(s) virtuelle(s) simultanée(s).", max_pads)
+        print_pairing_qr(ip, port, stream.secret if stream else None)
+        watch_task = asyncio.create_task(watch_network(network_address(), changed))
+        await changed.wait()
     finally:
         if watch_task is not None:
             watch_task.cancel()
+        await asyncio.to_thread(control.stop)
         if stream_server is not None:
             await stream.stop(stream_server)
-        if diag_task is not None:
-            diag_task.cancel()
         if aiozc is not None:
             await aiozc.async_close()
         wifi_power_save_restore(power_interface)

@@ -131,6 +131,7 @@ class UdpSession:
                     if 0 <= index < len(packets):
                         self.server.send(packets[index], self.addr)
                         self.retransmitted += 1
+                        self.server.counters["retransmitted"] += 1
                 return
 
     async def run(self):
@@ -170,6 +171,7 @@ class UdpVideoServer(asyncio.DatagramProtocol):
         self.on_loss = on_loss
         self.on_off = on_off
         self.on_frame_sent = None
+        self.counters = {"delivered": 0, "lost": 0, "recovered": 0, "requested": 0, "retransmitted": 0}
 
     def connection_made(self, transport):
         self.transport = transport
@@ -227,6 +229,10 @@ class UdpVideoServer(asyncio.DatagramProtocol):
             session.retransmit(frame_id, indexes)
         elif kind == TYPE_STATS and len(body) >= STATS_BODY.size:
             delivered, lost, recovered, requested = STATS_BODY.unpack_from(body)
+            self.counters["delivered"] += delivered
+            self.counters["lost"] += lost
+            self.counters["recovered"] += recovered
+            self.counters["requested"] += requested
             if lost:
                 self.on_loss(session.owner)
 
