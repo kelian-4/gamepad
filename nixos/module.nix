@@ -39,7 +39,7 @@ in
     streamPort = mkOption {
       type = types.port;
       default = 8766;
-      description = "Port TCP du flux vidéo de l'écran (à passer au serveur avec --stream-port si modifié).";
+      description = "Port TCP du flux vidéo de l'écran (à passer au serveur avec --stream-port si modifié). Le canal UDP utilise le port suivant.";
     };
   };
 
@@ -54,7 +54,7 @@ in
 
     networking.firewall = mkIf cfg.openFirewall {
       allowedTCPPorts = [ cfg.port ] ++ optional cfg.screenStream cfg.streamPort;
-      allowedUDPPorts = [ 5353 ];
+      allowedUDPPorts = [ 5353 ] ++ optional cfg.screenStream (cfg.streamPort + 1);
       extraInputRules = ''
         ip daddr 224.0.0.251 udp dport 5353 accept
       '';

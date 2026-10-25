@@ -96,7 +96,7 @@ Sur le port du flux, l'app ouvre un WebSocket et envoie en texte :
 
 ### Canal vidéo UDP
 
-Les lecteurs vidéo temps réel (Moonlight, Steam Link) envoient la vidéo en UDP : en TCP, un paquet perdu bloque tout ce qui suit jusqu'à sa retransmission, ce qui gèle l'image. Le serveur propose donc un canal UDP, sur le port du flux plus 1 (8767 par défaut), négocié par le WebSocket du flux. Sans réponse de l'UDP, ou avec une app qui ne le demande pas, le flux reste en WebSocket.
+Les lecteurs vidéo temps réel (Moonlight, Steam Link) envoient la vidéo en UDP : en TCP, un paquet perdu bloque tout ce qui suit jusqu'à sa retransmission, ce qui gèle l'image. Le serveur propose donc un canal UDP, sur le port du flux plus 1 (8767 par défaut), négocié par le WebSocket du flux. Sans réponse de l'UDP, ou avec une app qui ne le demande pas, le flux reste en WebSocket. Le module NixOS ouvre ce port UDP avec le port du flux ; avec un pare-feu géré à la main, il faut ouvrir `8767/udp`.
 
 Négociation : l'app ajoute `"udp":true` dans `stream_hello`. Le `stream_ack` contient alors `udpPort` et `udpToken` (8 octets en hexadécimal, propres à cette connexion). L'app ouvre un socket UDP vers `udpPort` et envoie `HELLO` toutes les 100 ms jusqu'à recevoir `ACK`. Dès le `HELLO`, le serveur envoie la vidéo en UDP et plus en WebSocket (qui ne porte plus que les messages texte). Tous les entiers sont big-endian.
 
